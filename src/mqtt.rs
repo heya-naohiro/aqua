@@ -28,25 +28,54 @@ pub struct Connect {
     pub will: bool,
     pub will_qos: u8,
     pub will_retain: bool,
+    pub will_topic: String,
+    pub will_payload: Option<bytes::Bytes>,
     pub user_password_flag: bool,
     pub user_name_flag: bool,
     pub client_id: String,
     pub username: Option<String>,
-    pub password: Option<String>,
+    pub password: Option<bytes::Bytes>,
     pub keepalive_timer: u16,
     pub properties: ConnectProperties,
+    pub will_properties: WillProperties,
 }
 
 pub struct ConnectProperties {
-    session_expiry_interval: u32,
-    receive_maximum: u16,
-    maximum_packet_size: u32,
-    topic_alias_maximum: u16,
-    request_response_information: bool,
-    request_problem_infromation: bool,
-    user_properties: Vec<(String, String)>,
-    authentication_method: Option<String>,
-    authentication_data: Option<bytes::Bytes>,
+    pub session_expiry_interval: u32,
+    pub receive_maximum: u16,
+    pub maximum_packet_size: u32,
+    pub topic_alias_maximum: u16,
+    pub request_response_information: bool,
+    pub request_problem_infromation: bool,
+    pub user_properties: Vec<(String, String)>,
+    pub authentication_method: Option<String>,
+    pub authentication_data: Option<bytes::Bytes>,
+}
+
+pub struct WillProperties {
+    pub will_delay_interval: u32,
+    pub payload_format_indicator: Option<bool>,
+    pub message_expiry_interval: Option<u32>,
+    pub content_type: Option<String>,
+    pub response_topic: Option<String>,
+    pub correlation_data: Option<bytes::Bytes>,
+    pub user_properties: Vec<(String, String)>,
+    pub subscription_identifier: usize,
+}
+
+impl Default for WillProperties {
+    fn default() -> Self {
+        Self {
+            will_delay_interval: 0,
+            payload_format_indicator: None,
+            message_expiry_interval: None,
+            content_type: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: vec![],
+            subscription_identifier: 0,
+        }
+    }
 }
 
 impl Default for ConnectProperties {
@@ -70,7 +99,40 @@ fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
     ((b_msb as u16) << 8) + b_lsb as u16
 }
 
-#[inline]
+pub fn decode_u32_bytes(buf: &bytes::Bytes, start_pos: usize) -> Result<u32, anyhow::Error> {
+    Ok(u32::from_be_bytes(
+        buf[start_pos..start_pos + 4]
+            .try_into()
+            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+    ))
+}
+
+pub fn decode_u16_bytes(buf: &bytes::Bytes, start_pos: usize) -> Result<u16, anyhow::Error> {
+    Ok(u16::from_be_bytes(
+        buf[start_pos..start_pos + 2]
+            .try_into()
+            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+    ))
+}
+
+pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32, anyhow::Error> {
+    Ok(u32::from_be_bytes(v.try_into().map_err(|_| {
+        anyhow::Error::msg("Invalid slice length for u32")
+    })?))
+}
+
+pub fn decode_utf8_string(
+    buf: &bytes::Bytes,
+    start_pos: usize,
+) -> Result<(String, usize), anyhow::Error> {
+    let length = decode_u16_bytes(buf, start_pos)? as usize;
+    let str = match std::str::from_utf8(&buf[start_pos + 2..start_pos + 2 + length]) {
+        Ok(v) => v,
+        Err(_) => return Err(anyhow::anyhow!("Protocol Error: Invalid utf8")),
+    };
+    Ok((str.to_string(), start_pos + 2 + length))
+}
+
 pub fn decode_variable_byte(buf: &bytes::Bytes, start_pos: usize) -> (usize, usize) {
     let mut remaining_length: usize = 0;
     for pos in start_pos..=start_pos + 3 {
@@ -157,13 +219,14 @@ impl Connect {
     ) -> Result<(), anyhow::Error> {
         // maximum 21 types properties
         let mut pos = start_pos;
-
         for _ in 1..=256 {
             // break
             let length = buf[pos + 1] as usize;
             //       8   9  10 11 12 13 | 14 ...
             // ... | x | 4 | p q r s | x  ...
             if pos + 2 + length < buf.len() {
+                // need improvement
+                // bufをそのまま扱うコードに変更する
                 let value_slice = &buf[pos + 2..pos + 2 + length];
                 match buf[pos] {
                     0x11 => {
@@ -227,52 +290,12 @@ impl Connect {
                         }
                     }
                     0x26 => {
-                        let mut pos = 0;
-                        loop {
-                            let name_length = &value_slice[pos..pos + 2];
-                            let name_length =
-                                u16::from_be_bytes(name_length.try_into().map_err(|_| {
-                                    anyhow::Error::msg("Invalid slice length for u8")
-                                })?) as usize;
-                            let name = match std::str::from_utf8(
-                                &value_slice[pos + 2..pos + name_length + 2],
-                            ) {
-                                Ok(v) => v,
-                                Err(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Protocol Error: Invalid user property name, not utf8"
-                                    ))
-                                }
-                            };
-                            let value_length =
-                                &value_slice[pos + name_length + 2..pos + name_length + 4];
-                            let value_length =
-                                u16::from_be_bytes(value_length.try_into().map_err(|_| {
-                                    anyhow::Error::msg("Invalid slice length for u8")
-                                })?) as usize;
-                            let value = match std::str::from_utf8(
-                                &value_slice[(pos + name_length + 4)
-                                    ..(pos + value_length + name_length + 4)],
-                            ) {
-                                Ok(v) => v,
-                                Err(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Protocol Error: Invalid user property name, not utf8"
-                                    ))
-                                }
-                            };
-                            self.properties
-                                .user_properties
-                                .append(&mut vec![(name.to_string(), value.to_string())]);
-                            pos = pos + value_length + name_length + 4;
-                            if pos == length {
-                                break;
-                            } else if pos > length {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol Error: Invalid user property length"
-                                ));
-                            }
-                        }
+                        // [TODO] refactor
+                        let buf = bytes::Bytes::copy_from_slice(value_slice);
+                        let (key, end_pos) = decode_utf8_string(&buf, 0)?;
+                        let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
+                        self.properties.user_properties.push((key, value));
+                        pos = end_pos;
                     }
                     0x15 => {
                         match self.properties.authentication_method {
@@ -328,7 +351,136 @@ impl Connect {
         }
         return Ok(());
     }
-    pub fn parse_payload(&mut self, buf: &bytes::Bytes) {}
+    pub fn parse_payload(&mut self, buf: &bytes::Bytes) -> Result<(), anyhow::Error> {
+        /* client id */
+        let mut pos = 0;
+        {
+            let client_id_length = u16::from_be_bytes(
+                buf[0..2]
+                    .try_into()
+                    .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
+            ) as usize;
+            self.client_id = match std::str::from_utf8(&buf[2..2 + client_id_length]) {
+                Ok(v) => v.to_string(),
+                Err(_) => return Err(anyhow::anyhow!("Protocol: Client ID parse Error, not utf8")),
+            };
+            pos = 2 + client_id_length;
+        }
+        /* will property*/
+        if self.will {
+            let (will_property_length, ret_pos) = decode_variable_byte(buf, pos);
+            pos = pos + ret_pos;
+            loop {
+                match buf[pos] {
+                    0x18 => {
+                        self.will_properties.will_delay_interval = decode_u32_bytes(buf, pos + 1)?;
+                        pos = pos + 5;
+                    }
+                    0x01 => {
+                        match self.will_properties.payload_format_indicator {
+                            Some(_) => {
+                                return Err(anyhow::anyhow!(
+                                    "Protocol: Duplicate Payload format indicator"
+                                ))
+                            }
+                            _ => {}
+                        };
+                        self.will_properties.payload_format_indicator = Some(buf[pos + 1] == 0b1);
+                        pos = pos + 2;
+                    }
+                    0x02 => {
+                        self.will_properties.message_expiry_interval =
+                            Some(decode_u32_bytes(buf, pos + 1)?);
+                        pos = pos + 5
+                    }
+                    0x03 => {
+                        match self.will_properties.content_type {
+                            Some(_) => {
+                                return Err(anyhow::anyhow!("Protocol: Duplicate content type"));
+                            }
+                            _ => {}
+                        };
+                        let (content_type, end_pos) = decode_utf8_string(buf, pos + 1)?;
+                        self.will_properties.content_type = Some(content_type);
+                        pos = end_pos;
+                    }
+                    0x08 => {
+                        //let end_pos;
+                        let (response_topic, end_pos) = decode_utf8_string(buf, pos + 1)?;
+                        self.will_properties.response_topic = Some(response_topic);
+
+                        pos = end_pos;
+                    }
+                    0x09 => {
+                        match self.will_properties.correlation_data {
+                            Some(_) => {
+                                return Err(anyhow::anyhow!(
+                                    "Protocol: Duplicate will properties correlation data"
+                                ));
+                            }
+                            _ => {}
+                        };
+                        let (datalength, end_pos) = decode_variable_byte(buf, pos + 1);
+                        self.will_properties.correlation_data = Some(
+                            bytes::Bytes::copy_from_slice(&buf[end_pos..end_pos + datalength]),
+                        );
+
+                        pos = end_pos + datalength;
+                    }
+                    0x26 => {
+                        let (key, end_pos) = decode_utf8_string(buf, pos + 1)?;
+                        let (value, end_pos) = decode_utf8_string(buf, end_pos)?;
+                        self.will_properties.user_properties.push((key, value));
+                        pos = end_pos;
+                    }
+                    0x0B => {
+                        let (id, end_pos) = decode_variable_byte(buf, pos + 1);
+                        self.will_properties.subscription_identifier = id;
+                        pos = end_pos;
+                    }
+
+                    _ => {}
+                }
+                if will_property_length == pos + 1 {
+                    break;
+                } else if will_property_length < pos + 1 {
+                    return Err(anyhow::anyhow!(
+                        "Protocol: Protocol Length ( will properties)"
+                    ));
+                }
+            }
+        }
+        /* will properties end */
+        /* */
+        if self.will {
+            // will topic
+            let (wt, end_pos) = decode_utf8_string(buf, pos)?;
+            self.will_topic = wt;
+            pos = end_pos;
+            // will payload
+            let datalength = decode_u16_bytes(buf, pos)? as usize;
+            self.will_payload = Some(bytes::Bytes::copy_from_slice(
+                &buf[pos + 2..pos + 2 + datalength],
+            ));
+
+            pos = pos + 2 + datalength;
+        }
+        if self.user_name_flag {
+            let (str, end_pos) = decode_utf8_string(buf, pos)?;
+            self.username = Some(str);
+            pos = end_pos;
+        }
+
+        if self.user_password_flag {
+            let datalength = decode_u16_bytes(buf, pos)? as usize;
+            self.password = Some(bytes::Bytes::copy_from_slice(
+                &buf[pos + 2..pos + 2 + datalength],
+            ));
+            pos = pos + 2 + datalength;
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for Connect {
@@ -339,6 +491,8 @@ impl Default for Connect {
             will: false,
             will_qos: 0,
             will_retain: false,
+            will_payload: None,
+            will_topic: "".to_string(),
             user_password_flag: false,
             user_name_flag: false,
             client_id: "".to_string(),
@@ -346,6 +500,7 @@ impl Default for Connect {
             password: None,
             keepalive_timer: 0,
             properties: ConnectProperties::default(),
+            will_properties: WillProperties::default(),
         }
     }
 }
