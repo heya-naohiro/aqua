@@ -21,7 +21,7 @@ pub struct MqttPacket {
     remaining_length: usize,
     control_packet: ControlPacket,
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub struct Connect {
     pub protocol_ver: ProtocolVersion,
     pub clean_session: bool,
@@ -39,7 +39,7 @@ pub struct Connect {
     pub properties: ConnectProperties,
     pub will_properties: WillProperties,
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub struct ConnectProperties {
     pub session_expiry_interval: u32,
     pub receive_maximum: u16,
@@ -51,7 +51,7 @@ pub struct ConnectProperties {
     pub authentication_method: Option<String>,
     pub authentication_data: Option<bytes::Bytes>,
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub struct WillProperties {
     pub will_delay_interval: u32,
     pub payload_format_indicator: Option<bool>,
@@ -219,7 +219,7 @@ impl Connect {
         self.will_qos = (b & 0b00011000) >> 3;
         self.will_retain = (b & 0b00100000) == 0b00100000;
         self.user_password_flag = (b & 0b01000000) == 0b01000000;
-        self.user_name_flag = (b & 0b10000000) == 0b01000000;
+        self.user_name_flag = (b & 0b10000000) == 0b10000000;
     }
 
     // return next position
@@ -522,7 +522,7 @@ impl Default for Disconnect {
         Self {}
     }
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum ProtocolVersion {
     V3,
     V3_1,
@@ -626,7 +626,7 @@ mod tests {
             assert_eq!(connect.will_qos, 0);
             assert_eq!(connect.will_retain, false);
             assert_eq!(connect.user_name_flag, false);
-            assert_eq!(connect.user_name_flag, false);
+            assert_eq!(connect.user_password_flag, false);
             assert_eq!(connect.keepalive_timer, 60);
             let consumed = ret.unwrap();
             println!("variable {}", consumed);
@@ -664,6 +664,65 @@ mod tests {
             let res = connect.parse_payload(&b);
             assert!(res.is_ok());
             assert_eq!(connect.client_id, "publish-710".to_string());
+            println!(">>>> {:?}", connect);
+
+            assert_eq!(connect.clean_session, true);
+            assert_eq!(connect.will, true);
+            assert_eq!(connect.will_qos, 1);
+            assert_eq!(connect.will_retain, false);
+            assert_eq!(connect.user_name_flag, true);
+            assert_eq!(connect.user_password_flag, true);
+            assert_eq!(connect.keepalive_timer, 60);
+
+            assert_eq!(connect.properties.session_expiry_interval, 120);
+            assert_eq!(connect.properties.receive_maximum, 20);
+            assert_eq!(connect.properties.maximum_packet_size, 256 * 1024);
+            assert_eq!(connect.properties.topic_alias_maximum, 10);
+            assert_eq!(connect.properties.request_problem_infromation, true);
+            assert_eq!(connect.properties.request_response_information, true);
+            assert_eq!(
+                connect.properties.user_properties,
+                [
+                    ("connect_key1".to_string(), "connect_value1".to_string()),
+                    ("connect_key2".to_string(), "connect_value2".to_string())
+                ]
+            );
+            assert_eq!(
+                connect.properties.authentication_method,
+                Some("example_auth_method".to_string())
+            );
+            assert_eq!(
+                connect.properties.authentication_data,
+                Some(bytes::Bytes::copy_from_slice(
+                    "example_auth_data".as_bytes()
+                ))
+            );
+            /* will */
+            assert_eq!(connect.will_properties.will_delay_interval, 10);
+            assert_eq!(connect.will_properties.message_expiry_interval, Some(30));
+            assert_eq!(
+                connect.will_properties.content_type,
+                Some("text/plain".to_string())
+            );
+            assert_eq!(connect.will_properties.payload_format_indicator, Some(true));
+            assert_eq!(
+                connect.will_properties.response_topic,
+                Some("test/response".to_string())
+            );
+            assert_eq!(
+                connect.will_properties.correlation_data,
+                Some(bytes::Bytes::copy_from_slice(
+                    "correlation_data_example".as_bytes()
+                ))
+            );
+            assert_eq!(
+                connect.will_properties.user_properties,
+                [
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                    ("key3".to_string(), "value3".to_string())
+                ]
+            );
         }
     }
 }
