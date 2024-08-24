@@ -21,7 +21,7 @@ pub struct MqttPacket {
     remaining_length: usize,
     control_packet: ControlPacket,
 }
-
+#[derive(PartialEq)]
 pub struct Connect {
     pub protocol_ver: ProtocolVersion,
     pub clean_session: bool,
@@ -39,7 +39,7 @@ pub struct Connect {
     pub properties: ConnectProperties,
     pub will_properties: WillProperties,
 }
-
+#[derive(PartialEq)]
 pub struct ConnectProperties {
     pub session_expiry_interval: u32,
     pub receive_maximum: u16,
@@ -51,7 +51,7 @@ pub struct ConnectProperties {
     pub authentication_method: Option<String>,
     pub authentication_data: Option<bytes::Bytes>,
 }
-
+#[derive(PartialEq)]
 pub struct WillProperties {
     pub will_delay_interval: u32,
     pub payload_format_indicator: Option<bool>,
@@ -126,6 +126,7 @@ pub fn decode_utf8_string(
     start_pos: usize,
 ) -> Result<(String, usize), anyhow::Error> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
+    println!("length: {}", length);
     let str = match std::str::from_utf8(&buf[start_pos + 2..start_pos + 2 + length]) {
         Ok(v) => v,
         Err(_) => return Err(anyhow::anyhow!("Protocol Error: Invalid utf8")),
@@ -133,7 +134,7 @@ pub fn decode_utf8_string(
     Ok((str.to_string(), start_pos + 2 + length))
 }
 
-// return end position
+// return end position(end is consumed already)
 pub fn decode_variable_byte(buf: &bytes::BytesMut, start_pos: usize) -> (usize, usize) {
     let mut remaining_length: usize = 0;
     let mut inc = 0;
@@ -199,7 +200,7 @@ impl Connect {
         match self.protocol_ver {
             ProtocolVersion::V5 => {
                 let (property_length, end_pos) = decode_variable_byte(buf, 10);
-                consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3*/
+                consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3 */
                 // property length;
                 /* variable  */
                 self.parse_properties(buf, end_pos + 1, property_length)?;
@@ -234,6 +235,7 @@ impl Connect {
             // start_pos = 3
             // propety_length = 5
             // pos = 8 -> OK
+            // pos means nextpos here.
             if pos == start_pos + property_length {
                 println!("OK!!!!!!");
                 break;
@@ -242,7 +244,7 @@ impl Connect {
             if pos > start_pos + property_length {
                 return Err(anyhow::anyhow!("Property Length Error"));
             }
-
+            println!("Connect Property 0x{:x}", buf[pos]);
             match buf[pos] {
                 0x11 => {
                     self.properties.session_expiry_interval = u32::from_be_bytes(
@@ -251,14 +253,16 @@ impl Connect {
                             .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
                     );
                     pos = pos + 5;
+                    println!("0x11, {}", self.properties.session_expiry_interval)
                 }
                 0x21 => {
-                    self.properties.session_expiry_interval = u32::from_be_bytes(
-                        buf[pos + 1..pos + 5]
+                    self.properties.receive_maximum = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
                             .try_into()
                             .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
                     );
-                    pos = pos + 5;
+                    pos = pos + 3;
+                    println!("0x21, {}", self.properties.receive_maximum);
                 }
                 0x27 => {
                     self.properties.maximum_packet_size = u32::from_be_bytes(
@@ -275,6 +279,7 @@ impl Connect {
                             .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
                     );
                     pos = pos + 3;
+                    println!("0x22, {}", self.properties.topic_alias_maximum);
                 }
                 0x19 => {
                     self.properties.request_response_information = (buf[pos + 1] & 0b1) == 0b1;
@@ -285,10 +290,14 @@ impl Connect {
                     pos = pos + 2;
                 }
                 0x26 => {
-                    let (key, end_pos) = decode_utf8_string(&buf, 0)?;
+                    println!("User property, debug");
+                    let (key, end_pos) = decode_utf8_string(&buf, pos + 1)?;
+                    println!("key: {}", key);
                     let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
+                    println!("value: {}", key);
                     self.properties.user_properties.push((key, value));
                     pos = end_pos;
+                    println!("0x26, {:#?}", self.properties.user_properties)
                 }
                 0x15 => {
                     match self.properties.authentication_method {
@@ -324,7 +333,7 @@ impl Connect {
                     pos = pos + 3 + length;
                 }
 
-                code => return Err(anyhow::anyhow!("Unknown Property {}", code)),
+                code => return Err(anyhow::anyhow!("Unknown Connect Property 0x{:x}", code)),
             }
         }
         return Ok(());
@@ -341,7 +350,6 @@ impl Connect {
                     .try_into()
                     .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
             ) as usize;
-            println!("lebnchh: {}", client_id_length);
             self.client_id = match std::str::from_utf8(&buf[2..2 + client_id_length]) {
                 Ok(v) => v.to_string(),
                 Err(_) => return Err(anyhow::anyhow!("Protocol: Client ID parse Error, not utf8")),
@@ -349,13 +357,30 @@ impl Connect {
             pos = 2 + client_id_length;
         }
         /* will property*/
+        /* */
         if self.will {
-            let (will_property_length, ret_pos) = decode_variable_byte(buf, pos);
-            pos = pos + ret_pos;
+            let (will_property_length, end_pos) = decode_variable_byte(buf, pos);
+            println!("will property length {}", will_property_length);
+            pos = end_pos + 1;
+            let first_will_property_position = pos;
             loop {
+                // 3 4 5 6 7 8
+                // 8 - 3 = 5
+                if pos - first_will_property_position == will_property_length {
+                    break;
+                } else if pos - first_will_property_position > will_property_length {
+                    return Err(anyhow::anyhow!(
+                        "Protocol: Protocol Length overrun (will properties)"
+                    ));
+                }
+                println!("will property 0x{:x}", buf[pos]);
                 match buf[pos] {
                     0x18 => {
                         self.will_properties.will_delay_interval = decode_u32_bytes(buf, pos + 1)?;
+                        println!(
+                            "will deray interval {}",
+                            self.will_properties.will_delay_interval
+                        );
                         pos = pos + 5;
                     }
                     0x01 => {
@@ -394,6 +419,7 @@ impl Connect {
                         pos = end_pos;
                     }
                     0x09 => {
+                        //?? Binary Data is represented by a Two Byte Integer length which indicates the number of data bytes, followed by that number of bytes. Thus, the length of Binary Data is limited to the range of 0 to 65,535 Bytes.
                         match self.will_properties.correlation_data {
                             Some(_) => {
                                 return Err(anyhow::anyhow!(
@@ -402,12 +428,16 @@ impl Connect {
                             }
                             _ => {}
                         };
-                        let (datalength, end_pos) = decode_variable_byte(buf, pos + 1);
+                        let datalength = decode_u16_bytes(buf, pos + 1)? as usize;
+                        println!("0x09 correlation_data length {:?}", datalength);
                         self.will_properties.correlation_data = Some(
-                            bytes::Bytes::copy_from_slice(&buf[end_pos..end_pos + datalength]),
+                            bytes::Bytes::copy_from_slice(&buf[pos + 3..pos + 3 + datalength]),
                         );
-
-                        pos = end_pos + datalength;
+                        println!(
+                            "0x09 correlation_data {:?}",
+                            self.will_properties.correlation_data
+                        );
+                        pos = pos + 3 + datalength;
                     }
                     0x26 => {
                         let (key, end_pos) = decode_utf8_string(buf, pos + 1)?;
@@ -418,17 +448,15 @@ impl Connect {
                     0x0B => {
                         let (id, end_pos) = decode_variable_byte(buf, pos + 1);
                         self.will_properties.subscription_identifier = id;
-                        pos = end_pos;
+                        pos = end_pos + 1;
                     }
 
-                    _ => {}
-                }
-                if will_property_length == pos + 1 {
-                    break;
-                } else if will_property_length < pos + 1 {
-                    return Err(anyhow::anyhow!(
-                        "Protocol: Protocol Length ( will properties)"
-                    ));
+                    code => {
+                        return Err(anyhow::anyhow!(
+                            "Protocol: Unknown Will Property Error 0x{:x}",
+                            code
+                        ));
+                    }
                 }
             }
         }
@@ -494,7 +522,7 @@ impl Default for Disconnect {
         Self {}
     }
 }
-
+#[derive(PartialEq)]
 pub enum ProtocolVersion {
     V3,
     V3_1,
@@ -575,6 +603,7 @@ mod tests {
         Client ID: publish-549
 
          */
+    /* v5 */
     #[test]
     fn connect_minimum() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
@@ -608,6 +637,33 @@ mod tests {
             assert_eq!(connect.client_id, "publish-549".to_string());
         } else {
             panic!("packet type error")
+        }
+    }
+
+    #[test]
+    fn mqtt5_all() {
+        let input = "10bd0200044d51545405ce003c7c11000000781500136578616d706c655f617574685f6d6574686f641600116578616d706c655f617574685f646174611701190121001422000a26000c636f6e6e6563745f6b657931000e636f6e6e6563745f76616c75653126000c636f6e6e6563745f6b657932000e636f6e6e6563745f76616c7565322700040000000b7075626c6973682d373130710101020000001e03000a746578742f706c61696e08000d746573742f726573706f6e7365090018636f7272656c6174696f6e5f646174615f6578616d706c65180000000a2600046b657931000676616c7565312600046b657932000676616c7565322600046b657933000676616c7565330009746573742f77696c6c000c57696c6c206d657373616765000d796f75725f757365726e616d65000d796f75725f70617373776f7264";
+        let mut b = decode_hex(input);
+        let ret = parse_fixed_header(&b);
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        println!("aaaaaa:{}", consumed);
+        b.advance(consumed);
+        if let ControlPacket::CONNECT(mut connect) = packet.control_packet {
+            let ret = connect.parse_variable_header(&b);
+            println!("Hello");
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            match connect.protocol_ver {
+                ProtocolVersion::V5 => {}
+                _ => panic!("Protocol unmatch"),
+            }
+            let consumed = ret.unwrap();
+            println!("variable {}", consumed);
+            b.advance(consumed);
+
+            let res = connect.parse_payload(&b);
+            assert!(res.is_ok());
+            assert_eq!(connect.client_id, "publish-710".to_string());
         }
     }
 }
