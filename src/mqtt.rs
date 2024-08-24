@@ -99,7 +99,7 @@ fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
     ((b_msb as u16) << 8) + b_lsb as u16
 }
 
-pub fn decode_u32_bytes(buf: &bytes::Bytes, start_pos: usize) -> Result<u32, anyhow::Error> {
+pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32, anyhow::Error> {
     Ok(u32::from_be_bytes(
         buf[start_pos..start_pos + 4]
             .try_into()
@@ -107,7 +107,7 @@ pub fn decode_u32_bytes(buf: &bytes::Bytes, start_pos: usize) -> Result<u32, any
     ))
 }
 
-pub fn decode_u16_bytes(buf: &bytes::Bytes, start_pos: usize) -> Result<u16, anyhow::Error> {
+pub fn decode_u16_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u16, anyhow::Error> {
     Ok(u16::from_be_bytes(
         buf[start_pos..start_pos + 2]
             .try_into()
@@ -122,7 +122,7 @@ pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32, anyhow::Error> {
 }
 
 pub fn decode_utf8_string(
-    buf: &bytes::Bytes,
+    buf: &bytes::BytesMut,
     start_pos: usize,
 ) -> Result<(String, usize), anyhow::Error> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
@@ -133,7 +133,7 @@ pub fn decode_utf8_string(
     Ok((str.to_string(), start_pos + 2 + length))
 }
 
-pub fn decode_variable_byte(buf: &bytes::Bytes, start_pos: usize) -> (usize, usize) {
+pub fn decode_variable_byte(buf: &bytes::BytesMut, start_pos: usize) -> (usize, usize) {
     let mut remaining_length: usize = 0;
     for pos in start_pos..=start_pos + 3 {
         remaining_length += (buf[pos] as usize & 0b01111111) << (pos * 7);
@@ -148,7 +148,7 @@ impl Connect {
     // set memebers
     pub fn parse_variable_header(
         &mut self,
-        buf: &bytes::Bytes,
+        buf: &bytes::BytesMut,
         remaining_length: usize,
     ) -> Result<(), anyhow::Error> {
         let protocol_length = (buf[0] as u16) << 8 + buf[1] as u16;
@@ -213,145 +213,111 @@ impl Connect {
     }
     fn parse_tlv_format(
         &mut self,
-        buf: &bytes::Bytes,
+        buf: &bytes::BytesMut,
         start_pos: usize,
         property_length: usize,
     ) -> Result<(), anyhow::Error> {
-        // maximum 21 types properties
         let mut pos = start_pos;
-        for _ in 1..=256 {
-            // break
-            let length = buf[pos + 1] as usize;
-            //       8   9  10 11 12 13 | 14 ...
-            // ... | x | 4 | p q r s | x  ...
-            if pos + 2 + length < buf.len() {
-                // need improvement
-                // bufをそのまま扱うコードに変更する
-                let value_slice = &buf[pos + 2..pos + 2 + length];
-                match buf[pos] {
-                    0x11 => {
-                        self.properties.session_expiry_interval = u32::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                        );
-                    }
-                    0x21 => {
-                        self.properties.session_expiry_interval = u32::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                        );
-                    }
-                    0x27 => {
-                        self.properties.maximum_packet_size = u32::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                        );
-                    }
-                    0x22 => {
-                        self.properties.topic_alias_maximum = u16::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
-                        )
-                    }
-                    0x19 => {
-                        let tmp = u8::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
-                        );
-                        self.properties.request_response_information = match tmp {
-                            0b0 => false,
-                            0b1 => true,
-                            _ => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol Error: Request response information"
-                                ))
-                            }
-                        }
-                    }
-                    0x17 => {
-                        let tmp = u8::from_be_bytes(
-                            value_slice
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
-                        );
-                        self.properties.request_problem_infromation = match tmp {
-                            0b0 => false,
-                            0b1 => true,
-                            _ => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol Error: Request problem information"
-                                ))
-                            }
-                        }
-                    }
-                    0x26 => {
-                        // [TODO] refactor
-                        let buf = bytes::Bytes::copy_from_slice(value_slice);
-                        let (key, end_pos) = decode_utf8_string(&buf, 0)?;
-                        let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
-                        self.properties.user_properties.push((key, value));
-                        pos = end_pos;
-                    }
-                    0x15 => {
-                        match self.properties.authentication_method {
-                            Some(_) => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol Error: Duplicateauthentication method"
-                                ));
-                            }
-                            None => {}
-                        };
-                        let length = u16::from_be_bytes(
-                            value_slice[0..2]
-                                .try_into()
-                                .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
-                        ) as usize;
-                        self.properties.authentication_method =
-                            match std::str::from_utf8(&value_slice[2..2 + length]) {
-                                Ok(v) => Some(v.to_string()),
-                                Err(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Protocol Error: authentication method property, not utf8"
-                                    ))
-                                }
-                            };
-                    }
-                    0x16 => {
-                        match self.properties.authentication_data {
-                            Some(_) => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol Error: Duplicateauthentication data"
-                                ));
-                            }
-                            None => {}
-                        };
-                        self.properties.authentication_data =
-                            Some(bytes::Bytes::copy_from_slice(value_slice));
-                    }
-
-                    code => return Err(anyhow::anyhow!("Unknown Property {}", code)),
+        loop {
+            match buf[pos] {
+                0x11 => {
+                    self.properties.session_expiry_interval = u32::from_be_bytes(
+                        buf[pos + 1..pos + 5]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 5;
                 }
-            } else {
-                return Err(anyhow::anyhow!("TLV Length Error"));
+                0x21 => {
+                    self.properties.session_expiry_interval = u32::from_be_bytes(
+                        buf[pos + 1..pos + 5]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 5;
+                }
+                0x27 => {
+                    self.properties.maximum_packet_size = u32::from_be_bytes(
+                        buf[pos + 1..pos + 5]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 5;
+                }
+                0x22 => {
+                    self.properties.topic_alias_maximum = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
+                    );
+                    pos = pos + 3;
+                }
+                0x19 => {
+                    self.properties.request_response_information = (buf[pos + 1] & 0b1) == 0b1;
+                    pos = pos + 2;
+                }
+                0x17 => {
+                    self.properties.request_problem_infromation = (buf[pos + 1] & 0b1) == 0b1;
+                    pos = pos + 2;
+                }
+                0x26 => {
+                    let (key, end_pos) = decode_utf8_string(&buf, 0)?;
+                    let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
+                    self.properties.user_properties.push((key, value));
+                    pos = end_pos;
+                }
+                0x15 => {
+                    match self.properties.authentication_method {
+                        Some(_) => {
+                            return Err(anyhow::anyhow!(
+                                "Protocol Error: Duplicateauthentication method"
+                            ));
+                        }
+                        None => {}
+                    };
+
+                    let (method, end_pos) = decode_utf8_string(buf, pos + 1)?;
+                    self.properties.authentication_method = Some(method);
+                    pos = end_pos;
+                }
+                0x16 => {
+                    match self.properties.authentication_data {
+                        Some(_) => {
+                            return Err(anyhow::anyhow!(
+                                "Protocol Error: Duplicateauthentication data"
+                            ));
+                        }
+                        None => {}
+                    };
+                    let length = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
+                    ) as usize;
+                    let data = &buf[pos + 3..pos + 3 + length];
+                    // copy
+                    self.properties.authentication_data = Some(bytes::Bytes::copy_from_slice(data));
+                    pos = pos + 3 + length;
+                }
+
+                code => return Err(anyhow::anyhow!("Unknown Property {}", code)),
             }
-            // next pos
-            pos = pos + length;
 
             //3 4 5 6 7 | 8
-            // end? //8  >= 3 + 4 -> 7
-            // just ==
-            if pos >= start_pos + property_length + 1 {
+            // start_pos = 3
+            // propety_length = 5
+            // pos = 8 -> OK
+            if pos == start_pos + property_length {
                 break;
+            }
+            // overrun
+            if pos > start_pos + property_length {
+                return Err(anyhow::anyhow!("Property Length Error"));
             }
         }
         return Ok(());
     }
-    pub fn parse_payload(&mut self, buf: &bytes::Bytes) -> Result<(), anyhow::Error> {
+    pub fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<(), anyhow::Error> {
         /* client id */
         let mut pos = 0;
         {
@@ -525,7 +491,8 @@ mod mqtt {
     use super::{decode_variable_byte, Connect, ControlPacket, Disconnect, MqttPacket};
     use anyhow;
 
-    pub fn parse_fixed_header(buf: &bytes::Bytes) -> Result<MqttPacket, anyhow::Error> {
+    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<MqttPacket, anyhow::Error> {
+        println!("{:#b}", buf[0]);
         let packet: MqttPacket = match buf[0] >> 4 {
             0b0001 => {
                 let (remaining_length, _) = decode_variable_byte(buf, 1);
@@ -546,5 +513,45 @@ mod mqtt {
             }
         };
         return Result::Ok(packet);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mqtt::parse_fixed_header;
+    fn decode_hex(str: &str) -> bytes::BytesMut {
+        let decoded = hex::decode(str).unwrap();
+        bytes::BytesMut::from(&decoded[..])
+    }
+    /*
+    MQ Telemetry Transport Protocol, Connect Command
+        Header Flags: 0x10, Message Type: Connect Command
+            0001 .... = Message Type: Connect Command (1)
+            .... 0000 = Reserved: 0
+        Msg Len: 24
+        Protocol Name Length: 4
+        Protocol Name: MQTT
+        Version: MQTT v5.0 (5)
+        Connect Flags: 0x02, QoS Level: At most once delivery (Fire and Forget), Clean Session Flag
+            0... .... = User Name Flag: Not set
+            .0.. .... = Password Flag: Not set
+            ..0. .... = Will Retain: Not set
+            ...0 0... = QoS Level: At most once delivery (Fire and Forget) (0)
+            .... .0.. = Will Flag: Not set
+            .... ..1. = Clean Session Flag: Set
+            .... ...0 = (Reserved): Not set
+        Keep Alive: 60
+        Properties
+            Total Length: 0
+        Client ID Length: 11
+        Client ID: publish-549
+
+         */
+    #[test]
+    fn connect_minimum() {
+        let input = "101800044d5154540502003c00000b7075626c6973682d353439";
+        let b = decode_hex(input);
+        let ret = parse_fixed_header(&b);
+        assert_eq!(ret.is_ok(), true);
     }
 }
