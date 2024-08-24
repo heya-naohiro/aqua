@@ -1,4 +1,4 @@
-name: Rust
+name: Rust Component Test
 
 on:
   push:
