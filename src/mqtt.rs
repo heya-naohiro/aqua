@@ -145,12 +145,13 @@ pub fn decode_variable_byte(buf: &bytes::BytesMut, start_pos: usize) -> (usize, 
 }
 
 impl Connect {
-    // set memebers
+    // return consumed length
     pub fn parse_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
         remaining_length: usize,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<usize, anyhow::Error> {
+        let mut consumed_length = 0;
         let protocol_length = (buf[0] as u16) << 8 + buf[1] as u16;
         // MQTT version 5 & 3.1.1 ( MQTT )
         if protocol_length == 4
@@ -169,6 +170,7 @@ impl Connect {
             }
             self.parse_connect_flag(buf[7]);
             self.keepalive_timer = byte_pair_to_u16(buf[8], buf[9]);
+            consumed_length = 10;
         } else if protocol_length == 6 /* MQTT version 3.1 & 3 ( MQIsdp ) */
 
             && buf[2] == 0b01001101
@@ -186,23 +188,27 @@ impl Connect {
             }
             self.parse_connect_flag(buf[9]);
             self.keepalive_timer = byte_pair_to_u16(buf[10], buf[11]);
+            consumed_length = 12;
+        } else {
+            return Err(anyhow::anyhow!("Connect Protocol Header Error"));
         }
+
         /* CONNECT Properties */
         match self.protocol_ver {
             ProtocolVersion::V5 => {
                 let (property_length, end_pos) = decode_variable_byte(buf, 10);
                 // property length;
                 /* variable  */
-                /* TLV format */
-                self.parse_tlv_format(buf, end_pos + 1, property_length)?;
+                self.parse_properties(buf, end_pos + 1, property_length)?;
+                consumed_length = consumed_length + property_length;
             }
             _ => {}
         }
 
-        Ok(())
+        Ok(consumed_length)
         // NEXT -> Connect Payload
     }
-    #[inline]
+
     fn parse_connect_flag(&mut self, b: u8) {
         self.clean_session = (b & 0b00000010) == 0b00000010;
         self.will = (b & 0b00000100) == 0b00000100;
@@ -211,7 +217,9 @@ impl Connect {
         self.user_password_flag = (b & 0b01000000) == 0b01000000;
         self.user_name_flag = (b & 0b10000000) == 0b01000000;
     }
-    fn parse_tlv_format(
+
+    // return next position
+    fn parse_properties(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
