@@ -133,26 +133,26 @@ pub fn decode_utf8_string(
     Ok((str.to_string(), start_pos + 2 + length))
 }
 
+// return end position
 pub fn decode_variable_byte(buf: &bytes::BytesMut, start_pos: usize) -> (usize, usize) {
     let mut remaining_length: usize = 0;
+    let mut inc = 0;
     for pos in start_pos..=start_pos + 3 {
-        remaining_length += (buf[pos] as usize & 0b01111111) << (pos * 7);
+        remaining_length += ((buf[pos] & 0b01111111) as usize) << (inc * 7);
         if (buf[pos] & 0b10000000) == 0 {
             return (remaining_length, pos);
         }
+        inc += 1;
     }
     (remaining_length, start_pos + 3)
 }
 
 impl Connect {
     // return consumed length
-    pub fn parse_variable_header(
-        &mut self,
-        buf: &bytes::BytesMut,
-        remaining_length: usize,
-    ) -> Result<usize, anyhow::Error> {
+    pub fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         let mut consumed_length = 0;
-        let protocol_length = (buf[0] as u16) << 8 + buf[1] as u16;
+        let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
+        println!("variable header: Variable length: {}", protocol_length);
         // MQTT version 5 & 3.1.1 ( MQTT )
         if protocol_length == 4
             && buf[2] == 0b01001101
@@ -166,7 +166,7 @@ impl Connect {
                 self.protocol_ver = ProtocolVersion::V3_1_1;
             } else {
                 // Error
-                return Err(anyhow::anyhow!("Connect Protocol Header Error"));
+                return Err(anyhow::anyhow!("Connect Protocol Header Error, length 4"));
             }
             self.parse_connect_flag(buf[7]);
             self.keepalive_timer = byte_pair_to_u16(buf[8], buf[9]);
@@ -184,19 +184,22 @@ impl Connect {
                 self.protocol_ver = ProtocolVersion::V3_1;
             } else {
                 // Error
-                return Err(anyhow::anyhow!("Connect Protocol Header Error"));
+                return Err(anyhow::anyhow!("Connect Protocol Header Error, length 6"));
             }
             self.parse_connect_flag(buf[9]);
             self.keepalive_timer = byte_pair_to_u16(buf[10], buf[11]);
             consumed_length = 12;
         } else {
-            return Err(anyhow::anyhow!("Connect Protocol Header Error"));
+            return Err(anyhow::anyhow!(
+                "Connect Protocol Header Error, length 6 not 4"
+            ));
         }
 
         /* CONNECT Properties */
         match self.protocol_ver {
             ProtocolVersion::V5 => {
                 let (property_length, end_pos) = decode_variable_byte(buf, 10);
+                consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3*/
                 // property length;
                 /* variable  */
                 self.parse_properties(buf, end_pos + 1, property_length)?;
@@ -227,6 +230,19 @@ impl Connect {
     ) -> Result<(), anyhow::Error> {
         let mut pos = start_pos;
         loop {
+            //3 4 5 6 7 | 8
+            // start_pos = 3
+            // propety_length = 5
+            // pos = 8 -> OK
+            if pos == start_pos + property_length {
+                println!("OK!!!!!!");
+                break;
+            }
+            // overrun
+            if pos > start_pos + property_length {
+                return Err(anyhow::anyhow!("Property Length Error"));
+            }
+
             match buf[pos] {
                 0x11 => {
                     self.properties.session_expiry_interval = u32::from_be_bytes(
@@ -310,30 +326,22 @@ impl Connect {
 
                 code => return Err(anyhow::anyhow!("Unknown Property {}", code)),
             }
-
-            //3 4 5 6 7 | 8
-            // start_pos = 3
-            // propety_length = 5
-            // pos = 8 -> OK
-            if pos == start_pos + property_length {
-                break;
-            }
-            // overrun
-            if pos > start_pos + property_length {
-                return Err(anyhow::anyhow!("Property Length Error"));
-            }
         }
         return Ok(());
     }
     pub fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<(), anyhow::Error> {
         /* client id */
+        // payload
+        println!("{:#04X?}", &buf[0..2]);
         let mut pos = 0;
         {
+            //decode_utf8_string
             let client_id_length = u16::from_be_bytes(
                 buf[0..2]
                     .try_into()
                     .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
             ) as usize;
+            println!("lebnchh: {}", client_id_length);
             self.client_id = match std::str::from_utf8(&buf[2..2 + client_id_length]) {
                 Ok(v) => v.to_string(),
                 Err(_) => return Err(anyhow::anyhow!("Protocol: Client ID parse Error, not utf8")),
@@ -498,21 +506,29 @@ pub enum ProtocolVersion {
 mod mqtt {
     use super::{decode_variable_byte, Connect, ControlPacket, Disconnect, MqttPacket};
     use anyhow;
-
-    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<MqttPacket, anyhow::Error> {
+    // (, consumed size)
+    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<(MqttPacket, usize), anyhow::Error> {
         println!("{:#b}", buf[0]);
+        let mut consumed_bytes = 0;
         let packet: MqttPacket = match buf[0] >> 4 {
             0b0001 => {
-                let (remaining_length, _) = decode_variable_byte(buf, 1);
+                let (remaining_length, endpos) = decode_variable_byte(buf, 1);
+                println!("remain :{}", remaining_length);
+                consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
+
                 MqttPacket {
                     control_packet: ControlPacket::CONNECT(Connect::default()),
                     remaining_length: remaining_length,
                 }
             }
-            0b1110 => MqttPacket {
-                control_packet: ControlPacket::DISCONNECT(Disconnect::default()),
-                remaining_length: 0,
-            },
+            0b1110 => {
+                let (remaining_length, endpos) = decode_variable_byte(buf, 1);
+                consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
+                MqttPacket {
+                    control_packet: ControlPacket::DISCONNECT(Disconnect::default()),
+                    remaining_length: 0,
+                }
+            }
             control_type => {
                 return Err(anyhow::anyhow!(
                     "Control packet decode error {}",
@@ -520,13 +536,17 @@ mod mqtt {
                 ))
             }
         };
-        return Result::Ok(packet);
+        return Result::Ok((packet, consumed_bytes));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::mqtt::parse_fixed_header;
+    use bytes::Buf;
+
+    use super::mqtt::*;
+    use crate::mqtt::ControlPacket;
+    use crate::mqtt::*;
     fn decode_hex(str: &str) -> bytes::BytesMut {
         let decoded = hex::decode(str).unwrap();
         bytes::BytesMut::from(&decoded[..])
@@ -558,8 +578,36 @@ mod tests {
     #[test]
     fn connect_minimum() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
-        let b = decode_hex(input);
+        let mut b = decode_hex(input);
         let ret = parse_fixed_header(&b);
-        assert_eq!(ret.is_ok(), true);
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        println!("aaaaaa:{}", consumed);
+        b.advance(consumed);
+        if let ControlPacket::CONNECT(mut connect) = packet.control_packet {
+            // variable header
+            let ret = connect.parse_variable_header(&b);
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            match connect.protocol_ver {
+                ProtocolVersion::V5 => {}
+                _ => panic!("Protocol unmatch"),
+            }
+            assert_eq!(connect.clean_session, true);
+            assert_eq!(connect.will, false);
+            assert_eq!(connect.will_qos, 0);
+            assert_eq!(connect.will_retain, false);
+            assert_eq!(connect.user_name_flag, false);
+            assert_eq!(connect.user_name_flag, false);
+            assert_eq!(connect.keepalive_timer, 60);
+            let consumed = ret.unwrap();
+            println!("variable {}", consumed);
+            b.advance(consumed);
+
+            let res = connect.parse_payload(&b);
+            assert!(res.is_ok());
+            assert_eq!(connect.client_id, "publish-549".to_string());
+        } else {
+            panic!("packet type error")
+        }
     }
 }
