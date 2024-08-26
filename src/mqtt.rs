@@ -655,6 +655,7 @@ mod tests {
         676616c7565322600046b657933000676616c7565330009746\
         573742f77696c6c000c57696c6c206d657373616765000d796\
         f75725f757365726e616d65000d796f75725f70617373776f7264";
+
         let mut b = decode_hex(input);
         let ret = parse_fixed_header(&b);
         assert!(ret.is_ok());

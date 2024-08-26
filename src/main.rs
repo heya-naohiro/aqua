@@ -3,6 +3,7 @@ mod hello_mqtt_world;
 mod hello_world;
 mod mqtt;
 mod org_axus;
+mod serve;
 mod timeout;
 use std::time::Duration;
 
