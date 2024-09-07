@@ -8,3 +8,9 @@ https://github.com/tower-rs/tower/tree/master/guides
 towerのhostの実装方法をマスターすべき
 
 
+## memo
+複数のmiddlewareが存在して然るべき
+- MQTT着信時
+- MQTTパケット確定時
+- Publishペイロード処理時
+

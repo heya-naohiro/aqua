@@ -3,8 +3,10 @@ use std::fmt::Debug;
 use std::future::{poll_fn, IntoFuture};
 use std::time::Duration;
 
+use crate::conn;
 use crate::mqtt::{self, MqttPacket};
 use futures_util::future::{ready, Ready};
+use hyper_util::rt::TokioExecutor;
 use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
@@ -47,6 +49,28 @@ where
                         poll_fn(|cx| make_service.poll_ready(cx))
                             .await
                             .unwrap_or_else(|err| match err {});
+
+                        let tower_service = make_service
+                            .call(aqua::IncomingStream {
+                                tcp_stream: &tcp_stream,
+                                remote_addr,
+                            })
+                            .await
+                            .unwrap_or_else(|err| match err {});
+
+                        let aqua_service = TowerToAquaService {
+                            service: tower_service,
+                        };
+
+                        tokio::spawn(async move {
+                            match Builder::new(TokioExecutor::new())
+                                .serve_connection(socket, aqua_service)
+                                .await
+                            {
+                                Ok(()) => {}
+                                Err(_err) => {}
+                            }
+                        })
                     }
 
                     None => {

@@ -1,4 +1,11 @@
+use anyhow::{Context, Result};
 use std::u16;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum MqttError {
+    InsufficientBytes,
+}
 
 pub enum ControlPacket {
     CONNECT(Connect),
@@ -18,8 +25,8 @@ pub enum ControlPacket {
 }
 
 pub struct MqttPacket {
-    remaining_length: usize,
-    control_packet: ControlPacket,
+    pub remaining_length: usize,
+    pub control_packet: ControlPacket,
 }
 #[derive(PartialEq, Debug)]
 pub struct Connect {
@@ -99,7 +106,7 @@ fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
     ((b_msb as u16) << 8) + b_lsb as u16
 }
 
-pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32, anyhow::Error> {
+pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(
         buf[start_pos..start_pos + 4]
             .try_into()
@@ -107,7 +114,7 @@ pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32, 
     ))
 }
 
-pub fn decode_u16_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u16, anyhow::Error> {
+pub fn decode_u16_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u16> {
     Ok(u16::from_be_bytes(
         buf[start_pos..start_pos + 2]
             .try_into()
@@ -115,7 +122,7 @@ pub fn decode_u16_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u16, 
     ))
 }
 
-pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32, anyhow::Error> {
+pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32> {
     Ok(u32::from_be_bytes(v.try_into().map_err(|_| {
         anyhow::Error::msg("Invalid slice length for u32")
     })?))
@@ -134,18 +141,25 @@ pub fn decode_utf8_string(
     Ok((str.to_string(), start_pos + 2 + length))
 }
 
+// error
 // return end position(end is consumed already)
-pub fn decode_variable_byte(buf: &bytes::BytesMut, start_pos: usize) -> (usize, usize) {
+pub fn decode_variable_byte(
+    buf: &bytes::BytesMut,
+    start_pos: usize,
+) -> Result<(usize, usize), anyhow::Error> {
     let mut remaining_length: usize = 0;
     let mut inc = 0;
     for pos in start_pos..=start_pos + 3 {
+        if buf.len() < pos {
+            MqttError::InsufficientBytes
+        }
         remaining_length += ((buf[pos] & 0b01111111) as usize) << (inc * 7);
         if (buf[pos] & 0b10000000) == 0 {
-            return (remaining_length, pos);
+            return Ok((remaining_length, pos));
         }
         inc += 1;
     }
-    (remaining_length, start_pos + 3)
+    Ok((remaining_length, start_pos + 3))
 }
 
 impl Connect {
@@ -199,7 +213,7 @@ impl Connect {
         /* CONNECT Properties */
         match self.protocol_ver {
             ProtocolVersion::V5 => {
-                let (property_length, end_pos) = decode_variable_byte(buf, 10);
+                let (property_length, end_pos) = decode_variable_byte(buf, 10)?;
                 consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3 */
                 // property length;
                 /* variable  */
@@ -359,7 +373,7 @@ impl Connect {
         /* will property*/
         /* */
         if self.will {
-            let (will_property_length, end_pos) = decode_variable_byte(buf, pos);
+            let (will_property_length, end_pos) = decode_variable_byte(buf, pos)?;
             println!("will property length {}", will_property_length);
             pos = end_pos + 1;
             let first_will_property_position = pos;
@@ -446,7 +460,7 @@ impl Connect {
                         pos = end_pos;
                     }
                     0x0B => {
-                        let (id, end_pos) = decode_variable_byte(buf, pos + 1);
+                        let (id, end_pos) = decode_variable_byte(buf, pos + 1)?;
                         self.will_properties.subscription_identifier = id;
                         pos = end_pos + 1;
                     }
@@ -531,7 +545,7 @@ pub enum ProtocolVersion {
     Other,
 }
 
-mod mqtt {
+pub mod mqtt {
     use super::{decode_variable_byte, Connect, ControlPacket, Disconnect, MqttPacket};
     use anyhow;
     // (, consumed size)
@@ -540,7 +554,7 @@ mod mqtt {
         let mut consumed_bytes = 0;
         let packet: MqttPacket = match buf[0] >> 4 {
             0b0001 => {
-                let (remaining_length, endpos) = decode_variable_byte(buf, 1);
+                let (remaining_length, endpos) = decode_variable_byte(buf, 1)?;
                 println!("remain :{}", remaining_length);
                 consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
 
@@ -550,7 +564,7 @@ mod mqtt {
                 }
             }
             0b1110 => {
-                let (remaining_length, endpos) = decode_variable_byte(buf, 1);
+                let (remaining_length, endpos) = decode_variable_byte(buf, 1)?;
                 consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
                 MqttPacket {
                     control_packet: ControlPacket::DISCONNECT(Disconnect::default()),

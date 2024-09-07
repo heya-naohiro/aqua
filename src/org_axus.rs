@@ -95,15 +95,15 @@ where
                 poll_fn(|cx| make_service.poll_ready(cx))
                     .await
                     .unwrap_or_else(|err| match err {});
-                /*
-                                let tower_service = make_service
-                                    .call(axum::IncomingStream {
-                                        tcp_stream: &tcp_stream,
-                                        remote_addr,
-                                    })
-                                    .await
-                                    .unwrap_or_else(|err| match err {});
-                */
+
+                let tower_service = make_service
+                    .call(axum::IncomingStream {
+                        tcp_stream: &tcp_stream,
+                        remote_addr,
+                    })
+                    .await
+                    .unwrap_or_else(|err| match err {});
+
                 /*
                                 let hyper_service = TowerToHyperService {
                                     service: tower_service,
