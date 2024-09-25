@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
+use bytes::BufMut;
+use std::future::Future;
+use std::pin::Pin;
 use std::u16;
 use thiserror::Error;
+use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug, Error)]
 pub enum MqttError {
@@ -28,6 +32,164 @@ pub struct MqttPacket {
     pub remaining_length: usize,
     pub control_packet: ControlPacket,
 }
+
+pub trait AsyncWriter {
+    fn write<'a, W>(
+        &'a mut self,
+        writer: &'a mut W,
+    ) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + 'a + Send>>
+    where
+        W: AsyncWrite + Unpin + 'a;
+}
+
+#[derive(Default)]
+pub struct Connack {
+    pub acknowledge_flag: bool,
+    pub session_present: bool,
+    pub connect_reason: u16,
+    pub connack_properties: ConnackProperties,
+}
+
+#[derive(Default)]
+pub struct ConnackProperties {
+    pub session_expiry_interval: Option<u32>,
+    pub receive_maximum: Option<u16>,
+    pub maximum_qos: Option<u8>,
+    pub retain_available: Option<bool>,
+    pub maximum_packet_size: Option<u32>,
+    pub assigned_client_identifier: Option<String>,
+    pub topic_alias_maximum: Option<u16>,
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+    pub wildcard_subscription_available: Option<u8>,
+    pub subscription_identifiers_available: Option<u8>,
+    pub shared_subscription_available: Option<u8>,
+    pub server_keep_alive: Option<u16>,
+    pub response_information: Option<String>,
+    pub server_reference: Option<String>,
+    pub authentication_method: Option<String>,
+    pub authentication_data: Option<bytes::Bytes>,
+}
+
+impl ConnackProperties {
+    fn build_bytes(&mut self) -> Result<bytes::Bytes> {
+        let mut buf = bytes::BytesMut::new();
+
+        if let Some(c) = self.session_expiry_interval {
+            buf.extend_from_slice(&[0x11]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.receive_maximum {
+            buf.extend_from_slice(&[0x21]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.maximum_qos {
+            buf.extend_from_slice(&[0x24]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.retain_available {
+            buf.extend_from_slice(&[0x25]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.maximum_packet_size {
+            buf.extend_from_slice(&[0x27]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.assigned_client_identifier {
+            buf.extend_from_slice(&[0x12]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.topic_alias_maximum {
+            buf.extend_from_slice(&[0x22]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.reason_string {
+            buf.extend_from_slice(&[0x1f]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        for v in self.user_properties {
+            buf.extend_from_slice(&[0x26]);
+            let l: u16 = usize::try_from(v.0)?;
+            buf.extend(l);
+            buf.extend(v.0);
+            let l: u16 = usize::try_from(v.1)?;
+            buf.extend(l);
+            buf.extend(v.1);
+        }
+        if let Some(c) = self.wildcard_subscription_available {
+            buf.extend_from_slice(&[0x28]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.subscription_identifiers_available {
+            buf.extend_from_slice(&[0x29]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.shared_subscription_available {
+            buf.extend_from_slice(&[0x2a]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.server_keep_alive {
+            buf.extend_from_slice(&[0x13]);
+            buf.extend_from_slice(&c.to_be_bytes());
+        }
+        if let Some(c) = self.response_information {
+            buf.extend_from_slice(&[0x1a]);
+            let l: u16 = usize::try_from(c)?;
+            buf.extend(l);
+            buf.extend(c);
+        }
+        if let Some(c) = self.server_reference {
+            buf.extend_from_slice(&[0x1c]);
+            let l: u16 = usize::try_from(c)?;
+            buf.extend(l);
+            buf.extend(c);
+        }
+        if let Some(c) = self.authentication_method {
+            buf.extend_from_slice(&[0x15]);
+            let l: u16 = usize::try_from(c)?;
+            buf.extend(l);
+            buf.extend(c);
+        }
+        if let Some(c) = self.authentication_data {
+            buf.extend_from_slice(&[0x16]);
+            // ?
+            buf.extend(c);
+        }
+        Ok(buf.freeze())
+    }
+}
+
+impl Connack {
+    fn build_bytes(&mut self) -> Result<bytes::BytesMut> {
+        let property = self.connack_properties.build_bytes()?;
+        // remain length is properties only.
+        let mut buf = bytes::BytesMut::with_capacity(property.len() + 4);
+        buf.put_u8(0b00100000);
+        add_encoded_variable_length(property.len(), buf);
+        buf.extend_from_slice(&property);
+    }
+    fn calc_remainlength(&mut self) -> usize {
+        10
+    }
+}
+
+impl AsyncWriter for Connack {
+    fn write<'a, W>(
+        &'a mut self,
+        writer: &'a mut W,
+    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + 'a + Send>>
+    where
+        W: AsyncWrite + Unpin + 'a,
+    {
+        Box::pin(async move {
+            // calc remain length;
+            // ramin lengthは書く直前に計算する
+
+            //writer.write();
+        })
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct Connect {
     pub protocol_ver: ProtocolVersion,
@@ -143,7 +305,7 @@ pub fn decode_utf8_string(
 
 // error
 // return end position(end is consumed already)
-pub fn decode_variable_byte(
+pub fn decode_variable_length(
     buf: &bytes::BytesMut,
     start_pos: usize,
 ) -> Result<(usize, usize), anyhow::Error> {
@@ -160,6 +322,21 @@ pub fn decode_variable_byte(
         inc += 1;
     }
     Ok((remaining_length, start_pos + 3))
+}
+
+// add data to tail
+pub fn add_encoded_variable_length(mut length: usize, buf: bytes::BufMut) {
+    for _ in 1..=4 {
+        let mut digit = (length % 128) as u8;
+        length /= 128;
+        if length > 0 {
+            digit |= 0x80;
+        }
+        buf.extend_from_slice(&[digit]);
+        if length == 0 {
+            break;
+        }
+    }
 }
 
 impl Connect {
@@ -213,7 +390,7 @@ impl Connect {
         /* CONNECT Properties */
         match self.protocol_ver {
             ProtocolVersion::V5 => {
-                let (property_length, end_pos) = decode_variable_byte(buf, 10)?;
+                let (property_length, end_pos) = decode_variable_length(buf, 10)?;
                 consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3 */
                 // property length;
                 /* variable  */
@@ -352,7 +529,7 @@ impl Connect {
         }
         return Ok(());
     }
-    pub fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<(), anyhow::Error> {
+    pub fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         /* client id */
         // payload
         println!("{:#04X?}", &buf[0..2]);
@@ -373,7 +550,7 @@ impl Connect {
         /* will property*/
         /* */
         if self.will {
-            let (will_property_length, end_pos) = decode_variable_byte(buf, pos)?;
+            let (will_property_length, end_pos) = decode_variable_length(buf, pos)?;
             println!("will property length {}", will_property_length);
             pos = end_pos + 1;
             let first_will_property_position = pos;
@@ -460,7 +637,7 @@ impl Connect {
                         pos = end_pos;
                     }
                     0x0B => {
-                        let (id, end_pos) = decode_variable_byte(buf, pos + 1)?;
+                        let (id, end_pos) = decode_variable_length(buf, pos + 1)?;
                         self.will_properties.subscription_identifier = id;
                         pos = end_pos + 1;
                     }
@@ -503,7 +680,7 @@ impl Connect {
             pos = pos + 2 + datalength;
         }
 
-        Ok(())
+        Ok(pos)
     }
 }
 
@@ -546,7 +723,7 @@ pub enum ProtocolVersion {
 }
 
 pub mod mqtt {
-    use super::{decode_variable_byte, Connect, ControlPacket, Disconnect, MqttPacket};
+    use super::{decode_variable_length, Connect, ControlPacket, Disconnect, MqttPacket};
     use anyhow;
     // (, consumed size)
     pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<(MqttPacket, usize), anyhow::Error> {
@@ -554,7 +731,7 @@ pub mod mqtt {
         let mut consumed_bytes = 0;
         let packet: MqttPacket = match buf[0] >> 4 {
             0b0001 => {
-                let (remaining_length, endpos) = decode_variable_byte(buf, 1)?;
+                let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
                 println!("remain :{}", remaining_length);
                 consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
 
@@ -564,7 +741,7 @@ pub mod mqtt {
                 }
             }
             0b1110 => {
-                let (remaining_length, endpos) = decode_variable_byte(buf, 1)?;
+                let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
                 consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
                 MqttPacket {
                     control_packet: ControlPacket::DISCONNECT(Disconnect::default()),
