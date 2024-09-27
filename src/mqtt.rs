@@ -46,8 +46,35 @@ pub trait AsyncWriter {
 pub struct Connack {
     pub acknowledge_flag: bool,
     pub session_present: bool,
-    pub connect_reason: u16,
+    pub connect_reason: ConnackReason,
     pub connack_properties: ConnackProperties,
+}
+
+pub enum ConnackReason {
+    /* Success */
+    Success = 0x00,
+    /* Must Close */
+    UnspecifiedError = 0x80,
+    MalformedPacket = 0x81,
+    ProtocolError = 0x82,
+    ImplementationSpecificError = 0x83,
+    UnsupportedProtocolVersion = 0x84,
+    ClientIdentifierNotValid = 0x85,
+    BadUserNameOrPassword = 0x86,
+    NotAuthorized = 0x87,
+    ServerUnavailable = 0x88,
+    ServerBusy = 0x89,
+    Banned = 0x8A,
+    BadAuthenticationMethod = 0x8C,
+    TopicNameInvalid = 0x90,
+    PacketTooLarge = 0x95,
+    QuotaExceeded = 0x97,
+    PayloadFormatInvalid = 0x99,
+    RetainNotSupported = 0x9A,
+    QoSNotSupported = 0x9B,
+    UseAnotherServer = 0x9C,
+    ServerMoved = 0x9D,
+    ConnectionRateExceeded = 0x9F,
 }
 
 #[derive(Default)]
@@ -160,16 +187,35 @@ impl ConnackProperties {
 }
 
 impl Connack {
-    fn build_bytes(&mut self) -> Result<bytes::BytesMut> {
-        let property = self.connack_properties.build_bytes()?;
+    fn build_bytes(&mut self) -> Result<bytes::Bytes> {
+        let properties = self.connack_properties.build_bytes()?;
         // remain length is properties only.
-        let mut buf = bytes::BytesMut::with_capacity(property.len() + 4);
+        let properties_len = properties.len();
+        let encoded_properties_len = encode_variable_bytes(properties_len);
+        let mut buf =
+            bytes::BytesMut::with_capacity(3 + encoded_properties_len.len() + properties.len());
+        /* Fixed header */
         buf.put_u8(0b00100000);
-        add_encoded_variable_length(property.len(), buf);
-        buf.extend_from_slice(&property);
-    }
-    fn calc_remainlength(&mut self) -> usize {
-        10
+        /* remaining length */
+
+        /* Variable header */
+        /* 1byte */
+        if self.session_present {
+            buf.put_u8(0x01);
+        } else {
+            buf.put_u8(0x00);
+        }
+        /* 2byte */
+        // Connect Reason Code
+        buf.put_u8(self.connect_reason);
+
+        /* Properties length */
+        buf.extend_from_slice(&encoded_properties_len);
+
+        /* Properties */
+        buf.extend_from_slice(&properties);
+        buf.freeze();
+        buf
     }
 }
 
@@ -182,10 +228,8 @@ impl AsyncWriter for Connack {
         W: AsyncWrite + Unpin + 'a,
     {
         Box::pin(async move {
-            // calc remain length;
-            // ramin lengthは書く直前に計算する
-
-            //writer.write();
+            let b = self.build_bytes()?;
+            writer.write_all_buf(&mut b).await;
         })
     }
 }
@@ -324,19 +368,20 @@ pub fn decode_variable_length(
     Ok((remaining_length, start_pos + 3))
 }
 
-// add data to tail
-pub fn add_encoded_variable_length(mut length: usize, buf: bytes::BufMut) {
+fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
+    let mut remaining_length = Vec::new();
     for _ in 1..=4 {
         let mut digit = (length % 128) as u8;
         length /= 128;
         if length > 0 {
             digit |= 0x80;
         }
-        buf.extend_from_slice(&[digit]);
+        remaining_length.push(digit);
         if length == 0 {
             break;
         }
     }
+    remaining_length
 }
 
 impl Connect {
