@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use bytes::BufMut;
-use std::future::Future;
 use std::pin::Pin;
-use std::u16;
+use std::{default, future::Future};
+use std::{fmt, u16};
 use thiserror::Error;
 use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug, Error)]
 pub enum MqttError {
+    #[error("Insufficient Bytes")]
     InsufficientBytes,
 }
 
@@ -37,9 +38,9 @@ pub trait AsyncWriter {
     fn write<'a, W>(
         &'a mut self,
         writer: &'a mut W,
-    ) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + 'a + Send>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a + Send>>
     where
-        W: AsyncWrite + Unpin + 'a;
+        W: AsyncWrite + Unpin + Send + 'a;
 }
 
 #[derive(Default)]
@@ -50,8 +51,10 @@ pub struct Connack {
     pub connack_properties: ConnackProperties,
 }
 
+#[derive(Default)]
 pub enum ConnackReason {
     /* Success */
+    #[default]
     Success = 0x00,
     /* Must Close */
     UnspecifiedError = 0x80,
@@ -116,7 +119,7 @@ impl ConnackProperties {
         }
         if let Some(c) = self.retain_available {
             buf.extend_from_slice(&[0x25]);
-            buf.extend_from_slice(&c.to_be_bytes());
+            buf.extend_from_slice(bool_to_bytes(c));
         }
         if let Some(c) = self.maximum_packet_size {
             buf.extend_from_slice(&[0x27]);
@@ -124,7 +127,7 @@ impl ConnackProperties {
         }
         if let Some(c) = self.assigned_client_identifier {
             buf.extend_from_slice(&[0x12]);
-            buf.extend_from_slice(&c.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = self.topic_alias_maximum {
             buf.extend_from_slice(&[0x22]);
@@ -132,16 +135,16 @@ impl ConnackProperties {
         }
         if let Some(c) = self.reason_string {
             buf.extend_from_slice(&[0x1f]);
-            buf.extend_from_slice(&c.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
         }
         for v in self.user_properties {
             buf.extend_from_slice(&[0x26]);
-            let l: u16 = usize::try_from(v.0)?;
-            buf.extend(l);
-            buf.extend(v.0);
-            let l: u16 = usize::try_from(v.1)?;
-            buf.extend(l);
-            buf.extend(v.1);
+            let l: u16 = v.0.len().try_into()?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.0.as_bytes());
+            let l: u16 = v.1.len().try_into()?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.1.as_bytes());
         }
         if let Some(c) = self.wildcard_subscription_available {
             buf.extend_from_slice(&[0x28]);
@@ -161,21 +164,21 @@ impl ConnackProperties {
         }
         if let Some(c) = self.response_information {
             buf.extend_from_slice(&[0x1a]);
-            let l: u16 = usize::try_from(c)?;
-            buf.extend(l);
-            buf.extend(c);
+            let l: u16 = c.len().try_into()?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = self.server_reference {
             buf.extend_from_slice(&[0x1c]);
-            let l: u16 = usize::try_from(c)?;
-            buf.extend(l);
-            buf.extend(c);
+            let l: u16 = c.len().try_into()?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = self.authentication_method {
             buf.extend_from_slice(&[0x15]);
-            let l: u16 = usize::try_from(c)?;
-            buf.extend(l);
-            buf.extend(c);
+            let l: u16 = c.len().try_into()?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = self.authentication_data {
             buf.extend_from_slice(&[0x16]);
@@ -207,15 +210,14 @@ impl Connack {
         }
         /* 2byte */
         // Connect Reason Code
-        buf.put_u8(self.connect_reason);
+        buf.put_u8(self.connect_reason as u8);
 
         /* Properties length */
         buf.extend_from_slice(&encoded_properties_len);
 
         /* Properties */
         buf.extend_from_slice(&properties);
-        buf.freeze();
-        buf
+        Ok(buf.freeze())
     }
 }
 
@@ -223,13 +225,14 @@ impl AsyncWriter for Connack {
     fn write<'a, W>(
         &'a mut self,
         writer: &'a mut W,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + 'a + Send>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a + Send>>
     where
-        W: AsyncWrite + Unpin + 'a,
+        W: AsyncWrite + Unpin + Send + 'a,
     {
         Box::pin(async move {
             let b = self.build_bytes()?;
             writer.write_all_buf(&mut b).await;
+            Ok(())
         })
     }
 }
@@ -312,6 +315,15 @@ fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
     ((b_msb as u16) << 8) + b_lsb as u16
 }
 
+#[inline]
+fn bool_to_bytes(b: bool) -> &'static [u8] {
+    if b {
+        &[1u8] // trueは1に変換
+    } else {
+        &[0u8] // falseは0に変換
+    }
+}
+
 pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(
         buf[start_pos..start_pos + 4]
@@ -352,12 +364,12 @@ pub fn decode_utf8_string(
 pub fn decode_variable_length(
     buf: &bytes::BytesMut,
     start_pos: usize,
-) -> Result<(usize, usize), anyhow::Error> {
+) -> Result<(usize, usize), MqttError> {
     let mut remaining_length: usize = 0;
     let mut inc = 0;
     for pos in start_pos..=start_pos + 3 {
         if buf.len() < pos {
-            MqttError::InsufficientBytes
+            return Err(MqttError::InsufficientBytes);
         }
         remaining_length += ((buf[pos] & 0b01111111) as usize) << (inc * 7);
         if (buf[pos] & 0b10000000) == 0 {
@@ -841,7 +853,7 @@ mod tests {
          */
     /* v5 */
     #[test]
-    fn connect_minimum() {
+    fn connect_minimum_parse() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
         let mut b = decode_hex(input);
         let ret = parse_fixed_header(&b);
@@ -877,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn mqtt5_all() {
+    fn mqtt5_connect_all_parse() {
         let input = "10bd0200044d51545405ce003c7c110000007\
         81500136578616d706c655f617574685f6d6574686f6416001\
         16578616d706c655f617574685f64617461170119012100142\

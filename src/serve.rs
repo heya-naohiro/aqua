@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use std::future::{poll_fn, IntoFuture};
 use std::time::Duration;
 
-use crate::conn;
 use crate::mqtt::{self, MqttPacket};
 use futures_util::future::{ready, Ready};
 use hyper_util::rt::TokioExecutor;
@@ -44,7 +43,7 @@ where
                 _marker: _,
             } = self;
             loop {
-                match tcp_accept(&tcp_listener).await {
+                /*match tcp_accept(&tcp_listener).await {
                     Some((tcp_stream, remote_addr)) => {
                         poll_fn(|cx| make_service.poll_ready(cx))
                             .await
@@ -77,6 +76,7 @@ where
                         eprintln!("Failed to accept connection, retrying...");
                     }
                 }
+                */
             }
         }))
     }

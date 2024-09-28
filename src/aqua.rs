@@ -1,4 +1,4 @@
-use crate::mqtt;
+use crate::mqtt::{self, MqttError};
 use anyhow::{anyhow, Context, Result};
 use bytes::{Buf, BytesMut};
 use hyper::body::Frame;
@@ -25,7 +25,7 @@ pub struct Response {
 }
 
 pub struct MqttConnection {
-    id: str,
+    id: String,
 }
 
 pub struct Connection {
@@ -43,16 +43,14 @@ impl Connection {
             mqttconnection: None,
         }
     }
-    pub async fn read_bytes_until_satisfied(&mut self, num_bytes: usize) -> Result<BytesMut> {
+    pub async fn read_bytes_until_satisfied(&mut self, num_bytes: usize) -> Result<()> {
         while self.buffer.len() < num_bytes {
-            let n = self
-                .stream
-                .read(&mut self.buffer[self.buffer.len()..])
-                .await?;
+            let n = self.stream.read_buf(&mut self.buffer).await?;
             if n == 0 {
-                return anyhow!("Unexpected EOF");
+                return Err(anyhow!("Unexpected EOF"));
             }
         }
+        Ok(())
     }
 
     /*
@@ -61,11 +59,11 @@ impl Connection {
      */
     pub async fn read_mqtt_frames(&mut self) -> Result<MqttIncoming> {
         self.read_bytes_until_satisfied(2);
-        let com = self.read_fixed_header().await?;
+        let mut com = self.read_fixed_header().await?;
         // ramain lengthが存在するか確認する
         // Publishでデータのサイズを考慮する（大きいデータは今バッファーになくてもよいことにする）
         match com.mqttpacket.control_packet {
-            mqtt::ControlPacket::CONNECT(connect) => {
+            mqtt::ControlPacket::CONNECT(mut connect) => {
                 // wait all remaining length, including payload
                 self.read_bytes_until_satisfied(com.mqttpacket.remaining_length);
                 let proceed_varheader = connect.parse_variable_header(&self.buffer)?;
@@ -77,11 +75,11 @@ impl Connection {
 
                 // length validate
                 if proceed_varheader + proceed_payload == com.mqttpacket.remaining_length {
-                    return anyhow!("remain length is not consistent remaining length is {}, but read length is {}", proceed_varheader + proceed_payload, com.mqttpacket.remaining_length);
+                    return Err(anyhow!("remain length is not consistent remaining length is {}, but read length is {}", proceed_varheader + proceed_payload, com.mqttpacket.remaining_length));
                 }
                 return Ok(com);
             }
-            mqtt::ControlPacket::DISCONNECT(disconnect) => {}
+            mqtt::ControlPacket::DISCONNECT(disconnect) => Err(anyhow!("Not implemented")),
         }
     }
 
@@ -91,25 +89,37 @@ impl Connection {
             match mqtt::mqtt::parse_fixed_header(&mut self.buffer) {
                 Ok((packet, proceed)) => {
                     self.buffer.advance(proceed);
-                    Ok(MqttIncoming {
+                    return Ok(MqttIncoming {
                         mqttpacket: packet,
                         state: FrameState::ReadFixedHeader,
-                    })
+                    });
                 }
-                mqtt::MqttError::InsufficientBytes => {
-                    self.read_bytes_until_satisfied(minimum_fixed_header + n);
+                Err(e) => {
+                    if let Some(mqtt_error) = e.downcast_ref::<MqttError>() {
+                        match mqtt_error {
+                            mqtt::MqttError::InsufficientBytes => {
+                                self.read_bytes_until_satisfied(minimum_fixed_header + n)
+                                    .await?
+                            }
+                            _ => {
+                                return Err(anyhow::anyhow!("Fixed Header Parse Mqtt Error {}", e));
+                            }
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!("Fixed Header Parse Error {}", e));
+                    }
                 }
-                Err(e) => return anyhow::anyhow!("Fixed Header Parse Error {}", e),
-            }
+            };
         }
-        return anyhow::anyhow!("Fixed Header Invalid");
+        return Err(anyhow::anyhow!("Fixed Header Invalid"));
     }
-
+    /*
     pub async fn write_packet(&mut self, packet: &impl mqtt::WriteBytes) {
         match self.stream.write_buf(packet.to_byte()).await {
             Ok()
         }
     }
+    */
 }
 
 enum FrameState {
@@ -124,12 +134,13 @@ pub struct MqttIncoming {
 }
 
 impl Server {
-    async fn run<T>(self, mut connection_handler: T) -> Result<(), anyhow::Error>
+    async fn run<T>(&self, mut connection_handler: T) -> Result<(), anyhow::Error>
     where
         T: tower::Service<MqttIncoming, Response = Response, Error = Infallible>,
     {
-        let listener = TcpListener::bind(self.addr).await?;
+        let listener = TcpListener::bind(&self.addr).await?;
         loop {
+            /*
             let (mut stream, remote_addr) = listener.accept().await?;
             tokio::task::spawn(async move {
                 // new connection
@@ -152,10 +163,11 @@ impl Server {
                     _ => {}
                 }
             })
+            */
         }
     }
     // Responseの内容に応じて実行する
-    async fn execute_operation(self, c: Connection, response: Response) {
+    async fn execute_operation(&self, c: Connection, response: Response) {
         match response.command {
             Operation::ReturnPacket => {}
             Operation::NOP => {}
