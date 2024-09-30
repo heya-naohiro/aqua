@@ -51,7 +51,7 @@ pub struct Connack {
     pub connack_properties: ConnackProperties,
 }
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub enum ConnackReason {
     /* Success */
     #[default]
@@ -125,7 +125,7 @@ impl ConnackProperties {
             buf.extend_from_slice(&[0x27]);
             buf.extend_from_slice(&c.to_be_bytes());
         }
-        if let Some(c) = self.assigned_client_identifier {
+        if let Some(c) = &self.assigned_client_identifier {
             buf.extend_from_slice(&[0x12]);
             buf.extend_from_slice(c.as_bytes());
         }
@@ -133,11 +133,11 @@ impl ConnackProperties {
             buf.extend_from_slice(&[0x22]);
             buf.extend_from_slice(&c.to_be_bytes());
         }
-        if let Some(c) = self.reason_string {
+        if let Some(c) = &self.reason_string {
             buf.extend_from_slice(&[0x1f]);
             buf.extend_from_slice(c.as_bytes());
         }
-        for v in self.user_properties {
+        for v in &self.user_properties {
             buf.extend_from_slice(&[0x26]);
             let l: u16 = v.0.len().try_into()?;
             buf.extend_from_slice(&l.to_be_bytes());
@@ -162,25 +162,25 @@ impl ConnackProperties {
             buf.extend_from_slice(&[0x13]);
             buf.extend_from_slice(&c.to_be_bytes());
         }
-        if let Some(c) = self.response_information {
+        if let Some(c) = &self.response_information {
             buf.extend_from_slice(&[0x1a]);
             let l: u16 = c.len().try_into()?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
-        if let Some(c) = self.server_reference {
+        if let Some(c) = &self.server_reference {
             buf.extend_from_slice(&[0x1c]);
             let l: u16 = c.len().try_into()?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
-        if let Some(c) = self.authentication_method {
+        if let Some(c) = &self.authentication_method {
             buf.extend_from_slice(&[0x15]);
             let l: u16 = c.len().try_into()?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
-        if let Some(c) = self.authentication_data {
+        if let Some(c) = &self.authentication_data {
             buf.extend_from_slice(&[0x16]);
             // ?
             buf.extend(c);
@@ -230,8 +230,8 @@ impl AsyncWriter for Connack {
         W: AsyncWrite + Unpin + Send + 'a,
     {
         Box::pin(async move {
-            let b = self.build_bytes()?;
-            writer.write_all_buf(&mut b).await;
+            let mut b = self.build_bytes()?;
+            writer.write_all_buf(&mut b).await?;
             Ok(())
         })
     }

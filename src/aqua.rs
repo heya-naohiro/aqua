@@ -62,8 +62,12 @@ impl Connection {
         let mut com = self.read_fixed_header().await?;
         // ramain lengthが存在するか確認する
         // Publishでデータのサイズを考慮する（大きいデータは今バッファーになくてもよいことにする）
-        match com.mqttpacket.control_packet {
-            mqtt::ControlPacket::CONNECT(mut connect) => {
+
+        // move（com.mqttpacket.control_packet）ではなく
+        // com.mqttpacket.control_packetを借用する
+        // なぜならば
+        match &mut com.mqttpacket.control_packet {
+            mqtt::ControlPacket::CONNECT(connect) => {
                 // wait all remaining length, including payload
                 self.read_bytes_until_satisfied(com.mqttpacket.remaining_length);
                 let proceed_varheader = connect.parse_variable_header(&self.buffer)?;
