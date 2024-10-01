@@ -48,7 +48,7 @@ pub struct Connack {
     pub acknowledge_flag: bool,
     pub session_present: bool,
     pub connect_reason: ConnackReason,
-    pub connack_properties: ConnackProperties,
+    pub connack_properties: Option<ConnackProperties>,
 }
 
 #[derive(Default, Copy, Clone)]
@@ -191,16 +191,22 @@ impl ConnackProperties {
 
 impl Connack {
     fn build_bytes(&mut self) -> Result<bytes::Bytes> {
-        let properties = self.connack_properties.build_bytes()?;
+        let mut properties_len = 0;
+        let mut properties_bytes = bytes::Bytes::new();
+        if let Some(connack_properties) = &mut self.connack_properties {
+            properties_bytes = connack_properties.build_bytes()?;
+            properties_len = properties_bytes.len();
+        }
         // remain length is properties only.
-        let properties_len = properties.len();
         let encoded_properties_len = encode_variable_bytes(properties_len);
         let mut buf =
-            bytes::BytesMut::with_capacity(3 + encoded_properties_len.len() + properties.len());
+            bytes::BytesMut::with_capacity(3 + encoded_properties_len.len() + properties_len);
+        let remain_length =
+            encode_variable_bytes(2 + encoded_properties_len.len() + properties_len);
         /* Fixed header */
         buf.put_u8(0b00100000);
         /* remaining length */
-
+        buf.extend_from_slice(&remain_length);
         /* Variable header */
         /* 1byte */
         if self.session_present {
@@ -216,7 +222,9 @@ impl Connack {
         buf.extend_from_slice(&encoded_properties_len);
 
         /* Properties */
-        buf.extend_from_slice(&properties);
+        if let Some(_) = self.connack_properties {
+            buf.extend_from_slice(&properties_bytes);
+        }
         Ok(buf.freeze())
     }
 }
@@ -985,5 +993,48 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn write_connack_success() {
+        /*
+        20 03              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(3バイト)
+        00                 // 可変ヘッダー: 接続確認フラグ（セッションプレゼントなし）
+        00                 // 可変ヘッダー: 接続応答コード (0x00 = 接続成功)
+        00                 // プロパティの長さ (プロパティなし)
+        */
+        let expected: &[u8] = &[0x20, 0x03, 0x00, 0x00, 0x00];
+        let mut connack = Connack {
+            acknowledge_flag: false,
+            session_present: false,
+            connect_reason: ConnackReason::Success,
+            connack_properties: None,
+        };
+        let result_bytes = connack.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+
+    #[test]
+    fn write_connack_reject() {
+        /*
+        20 03              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(3バイト)
+        00                 // 可変ヘッダー: 接続確認フラグ（セッションプレゼントなし）
+        82                 // 可変ヘッダー: 接続応答コード (0x82 = 認証エラー)
+        00                 // プロパティの長さ (プロパティなし)
+                 */
+    }
+
+    #[test]
+    fn write_connack_success_with_properties() {
+        /*
+        20 0E              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(14バイト)
+        00                 // 可変ヘッダー: 接続確認フラグ（セッションプレゼントなし）
+        00                 // 可変ヘッダー: 接続応答コード (0x00 = 接続成功)
+        0B                 // プロパティ長 (11バイト)
+        11                 // セッション有効期間 (Property Identifier = 0x11)
+        00 00 0E 10        // セッション有効期間の値 (3600秒 = 1時間)
+        12                 // 受信最大 (Property Identifier = 0x12)
+        00 0A              // 受信最大の値 (10メッセージ)
+                 */
     }
 }
