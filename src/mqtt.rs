@@ -1036,17 +1036,18 @@ mod tests {
     #[test]
     fn write_connack_success_with_properties() {
         /*
-        20 0E              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(14バイト)
+        20 0D              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(13バイト)
         00                 // 可変ヘッダー: 接続確認フラグ（セッションプレゼントなし）
         00                 // 可変ヘッダー: 接続応答コード (0x00 = 接続成功)
-        0B                 // プロパティ長 (11バイト)
+        0A                 // プロパティ長 (10バイト)
         11                 // セッション有効期間 (Property Identifier = 0x11)
         00 00 0E 10        // セッション有効期間の値 (3600秒 = 1時間)
-        12                 // 受信最大 (Property Identifier = 0x12)
-        00 0A              // 受信最大の値 (10メッセージ)
+        27                 // 受信最大 (Property Identifier = 0x27)
+        00 00 00 0A              // 受信最大の値 (10メッセージ)
         */
         let expected: &[u8] = &[
-            0x20, 0x0E, 0x00, 0x00, 0x0B, 0x11, 0x00, 0x00, 0x0E, 0x10, 0x12, 0x00, 0x0A,
+            0x20, 0x0D, 0x00, 0x00, 0x0A, 0x11, 0x00, 0x00, 0x0E, 0x10, 0x27, 0x00, 0x00, 0x00,
+            0x0A,
         ];
         let mut p = ConnackProperties::default();
         p.session_expiry_interval = Some(3600);
@@ -1054,7 +1055,7 @@ mod tests {
         let mut connack = Connack {
             acknowledge_flag: false,
             session_present: false,
-            connect_reason: ConnackReason::NotAuthorized,
+            connect_reason: ConnackReason::Success,
             connack_properties: Some(p),
         };
 
