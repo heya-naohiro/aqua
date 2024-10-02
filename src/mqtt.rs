@@ -1019,9 +1019,18 @@ mod tests {
         /*
         20 03              // 固定ヘッダー: パケットタイプ(0x20) + 残りの長さ(3バイト)
         00                 // 可変ヘッダー: 接続確認フラグ（セッションプレゼントなし）
-        82                 // 可変ヘッダー: 接続応答コード (0x82 = 認証エラー)
+        82                 // 可変ヘッダー: 接続応答コード (0x87 = 認証エラー)
         00                 // プロパティの長さ (プロパティなし)
-                 */
+        */
+        let expected: &[u8] = &[0x20, 0x03, 0x00, 0x87, 0x00];
+        let mut connack = Connack {
+            acknowledge_flag: false,
+            session_present: false,
+            connect_reason: ConnackReason::NotAuthorized,
+            connack_properties: None,
+        };
+        let result_bytes = connack.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
     }
 
     #[test]
@@ -1035,6 +1044,21 @@ mod tests {
         00 00 0E 10        // セッション有効期間の値 (3600秒 = 1時間)
         12                 // 受信最大 (Property Identifier = 0x12)
         00 0A              // 受信最大の値 (10メッセージ)
-                 */
+        */
+        let expected: &[u8] = &[
+            0x20, 0x0E, 0x00, 0x00, 0x0B, 0x11, 0x00, 0x00, 0x0E, 0x10, 0x12, 0x00, 0x0A,
+        ];
+        let mut p = ConnackProperties::default();
+        p.session_expiry_interval = Some(3600);
+        p.maximum_packet_size = Some(10);
+        let mut connack = Connack {
+            acknowledge_flag: false,
+            session_present: false,
+            connect_reason: ConnackReason::NotAuthorized,
+            connack_properties: Some(p),
+        };
+
+        let result_bytes = connack.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
     }
 }
