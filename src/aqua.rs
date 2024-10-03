@@ -58,7 +58,7 @@ impl Connection {
     | Remaining Length(1-3)                                                       |
      */
     pub async fn read_mqtt_frames(&mut self) -> Result<MqttIncoming> {
-        self.read_bytes_until_satisfied(2);
+        self.read_bytes_until_satisfied(2).await?;
         let mut com = self.read_fixed_header().await?;
         // ramain lengthが存在するか確認する
         // Publishでデータのサイズを考慮する（大きいデータは今バッファーになくてもよいことにする）
@@ -138,22 +138,21 @@ pub struct MqttIncoming {
 }
 
 impl Server {
-    async fn run<T>(&self, mut connection_handler: T) -> Result<(), anyhow::Error>
+    async fn run<T>(&self, mut connection_handler: T) -> Result<()>
     where
         T: tower::Service<MqttIncoming, Response = Response, Error = Infallible>,
     {
         let listener = TcpListener::bind(&self.addr).await?;
         loop {
-            /*
             let (mut stream, remote_addr) = listener.accept().await?;
             tokio::task::spawn(async move {
                 // new connection
                 let c = Connection::new(stream);
                 // parse header
-                let incoming_packet = match c.read_mqtt_frames() {
+                let incoming_packet = match c.read_mqtt_frames().await {
                     Ok(incoming) => incoming,
                     Err(err) => {
-                        return anyhow::anyhow!("Connection Protocol Error {}", err);
+                        return Err(anyhow!("Connection Protocol Error {}", err));
                     }
                 };
                 match incoming_packet.mqttpacket.control_packet {
@@ -161,20 +160,21 @@ impl Server {
                         match connection_handler.call(incoming_packet).await {
                             // command(serviceによるreturn)を処理する
                             Ok(response) => self.execute_operation(c, response).await?,
-                            Err(error) => {} //handle_error(error, connection),
+                            Err(error) => Ok(()), //handle_error(error, connection),
                         }
+                        Ok(())
                     }
-                    _ => {}
+                    _ => Ok(()),
                 }
-            })
-            */
+            });
         }
     }
     // Responseの内容に応じて実行する
-    async fn execute_operation(&self, c: Connection, response: Response) {
+    async fn execute_operation(&self, c: Connection, response: Response) -> Result<()> {
         match response.command {
             Operation::ReturnPacket => {}
             Operation::NOP => {}
         }
+        Ok(())
     }
 }

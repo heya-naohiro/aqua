@@ -1,9 +1,6 @@
 mod aqua;
 mod mqtt;
 mod serve;
-use axum::{response::Html, routing::get, Router};
-use std::time::Duration;
-use tower::ServiceBuilder;
 
 async fn handler() -> &'static str {
     "Hello world"
@@ -22,7 +19,7 @@ async fn main() {
     //let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     //org_axus::serve(listener, app).await.unwrap();
     //axum::serve(listener, app).await.unwrap();
-    //aqua::serve(listener, svc).await.unwrap();
+    serve::serve().await;
 }
 
 async fn root() -> &'static str {

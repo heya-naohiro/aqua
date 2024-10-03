@@ -16,3 +16,8 @@ towerのhostの実装方法をマスターすべき
 
 ## TODO
 送信、受信に使用するbufは単一Connectで送信・受信それぞれで使い回すことができるそう
+
+## TODO2
+ビルドできるまでにする(Con-Connack)
+exampleを用意する
+tests配下にpytestでintegration testを書く
