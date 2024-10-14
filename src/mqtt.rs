@@ -15,8 +15,8 @@ pub enum MqttError {
 pub enum ControlPacket {
     CONNECT(Connect),
     DISCONNECT(Disconnect),
+    CONNACK(Connack),
     /*
-    CONNACK(Conanck),
     PUBLISH(Publish),
     PUBACK(Puback),
     PUBREC(Pubrec),

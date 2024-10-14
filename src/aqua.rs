@@ -19,9 +19,12 @@ enum Operation {
     NOP,
 }
 
-pub struct Response {
+pub struct Response<T>
+where
+    T: mqtt::AsyncWriter,
+{
     command: Operation,
-    packet: mqtt::MqttPacket,
+    packet: T,
 }
 
 pub struct MqttConnection {
@@ -84,6 +87,8 @@ impl Connection {
                 return Ok(com);
             }
             mqtt::ControlPacket::DISCONNECT(disconnect) => Err(anyhow!("Not implemented")),
+
+            _ => Err(anyhow!("not expected control packet")),
         }
     }
 
@@ -138,13 +143,22 @@ pub struct MqttIncoming {
 }
 
 impl Server {
-    async fn run<T>(&self, mut connection_handler: T) -> Result<()>
+    async fn run<T, U>(&self, mut connection_handler: T) -> Result<()>
     where
-        T: tower::Service<MqttIncoming, Response = Response, Error = Infallible>,
+        T: tower::Service<MqttIncoming, Response = Response<U>, Error = Infallible>
+            + Send
+            + 'static,
+        U: mqtt::AsyncWriter + Send + 'static,
     {
         let listener = TcpListener::bind(&self.addr).await?;
         loop {
-            let (mut stream, remote_addr) = listener.accept().await?;
+            let (mut stream, remote_addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(err) => {
+                    eprintln!("Failed to accept connection: {}", err);
+                    continue; // 次のループに進む
+                }
+            };
             tokio::task::spawn(async move {
                 // new connection
                 let c = Connection::new(stream);
@@ -152,27 +166,36 @@ impl Server {
                 let incoming_packet = match c.read_mqtt_frames().await {
                     Ok(incoming) => incoming,
                     Err(err) => {
-                        return Err(anyhow!("Connection Protocol Error {}", err));
+                        eprintln!("Connection Protocol Error: {}", err);
+                        return;
                     }
                 };
                 match incoming_packet.mqttpacket.control_packet {
                     mqtt::ControlPacket::CONNECT(connect) => {
                         match connection_handler.call(incoming_packet).await {
                             // command(serviceによるreturn)を処理する
-                            Ok(response) => self.execute_operation(c, response).await?,
-                            Err(error) => Ok(()), //handle_error(error, connection),
+                            Ok(response) => {
+                                self.execute_operation(c, response).await;
+                            }
+                            Err(error) => {
+                                eprintln!("Connect handle error: {:?}", error)
+                            } //handle_error(error, connection),
                         }
-                        Ok(())
                     }
-                    _ => Ok(()),
+                    _ => {}
                 }
             });
         }
     }
     // Responseの内容に応じて実行する
-    async fn execute_operation(&self, c: Connection, response: Response) -> Result<()> {
+    async fn execute_operation<T>(&self, mut c: Connection, mut response: Response<T>) -> Result<()>
+    where
+        T: mqtt::AsyncWriter,
+    {
         match response.command {
-            Operation::ReturnPacket => {}
+            Operation::ReturnPacket => {
+                response.packet.write(&mut c.stream).await?;
+            }
             Operation::NOP => {}
         }
         Ok(())
