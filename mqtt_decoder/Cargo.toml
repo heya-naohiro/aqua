@@ -1,14 +1,7 @@
 [package]
-name = "aqua"
+name = "mqtt_decoder"
 version = "0.1.0"
 edition = "2021"
-
-[workspace]
-members = [
-    "mqtt_decoder"
-]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = { version = "1.0.89", features = ["backtrace", "std"]}

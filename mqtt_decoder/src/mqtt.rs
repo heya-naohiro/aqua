@@ -1,10 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::BufMut;
-use std::pin::Pin;
-use std::{default, future::Future};
-use std::{fmt, u16};
+use std::u16;
 use thiserror::Error;
-use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug, Error)]
 pub enum MqttError {
@@ -29,22 +26,29 @@ pub enum ControlPacket {
     */
 }
 
-pub struct MqttPacket {
-    pub remaining_length: usize,
-    pub control_packet: ControlPacket,
+pub trait MqttPacket {
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
 }
 
-pub trait AsyncWriter {
-    fn write<'a, W>(
-        &'a mut self,
-        writer: &'a mut W,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a + Send>>
-    where
-        W: AsyncWrite + Unpin + Send + 'a;
+impl MqttPacket for ControlPacket {
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+        match self {
+            ControlPacket::CONNECT(p) => p.parse_payload(buf),
+            _ => Err(anyhow::anyhow!("Not Implemented")),
+        }
+    }
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+        match self {
+            ControlPacket::CONNECT(p) => p.parse_variable_header(buf),
+            _ => Err(anyhow::anyhow!("Not Implemented")),
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct Connack {
+    pub remaining_length: usize,
     pub acknowledge_flag: bool,
     pub session_present: bool,
     pub connect_reason: ConnackReason,
@@ -229,24 +233,9 @@ impl Connack {
     }
 }
 
-impl AsyncWriter for Connack {
-    fn write<'a, W>(
-        &'a mut self,
-        writer: &'a mut W,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a + Send>>
-    where
-        W: AsyncWrite + Unpin + Send + 'a,
-    {
-        Box::pin(async move {
-            let mut b = self.build_bytes()?;
-            writer.write_all_buf(&mut b).await?;
-            Ok(())
-        })
-    }
-}
-
 #[derive(PartialEq, Debug)]
 pub struct Connect {
+    pub remain_length: usize,
     pub protocol_ver: ProtocolVersion,
     pub clean_session: bool,
     pub will: bool,
@@ -403,10 +392,9 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
     }
     remaining_length
 }
-
-impl Connect {
+impl MqttPacket for Connect {
     // return consumed length
-    pub fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         let mut consumed_length = 0;
         let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
         println!("variable header: Variable length: {}", protocol_length);
@@ -469,132 +457,7 @@ impl Connect {
         // NEXT -> Connect Payload
     }
 
-    fn parse_connect_flag(&mut self, b: u8) {
-        self.clean_session = (b & 0b00000010) == 0b00000010;
-        self.will = (b & 0b00000100) == 0b00000100;
-        self.will_qos = (b & 0b00011000) >> 3;
-        self.will_retain = (b & 0b00100000) == 0b00100000;
-        self.user_password_flag = (b & 0b01000000) == 0b01000000;
-        self.user_name_flag = (b & 0b10000000) == 0b10000000;
-    }
-
-    // return next position
-    fn parse_properties(
-        &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
-        property_length: usize,
-    ) -> Result<(), anyhow::Error> {
-        let mut pos = start_pos;
-        loop {
-            //3 4 5 6 7 | 8
-            // start_pos = 3
-            // propety_length = 5
-            // pos = 8 -> OK
-            // pos means nextpos here.
-            if pos == start_pos + property_length {
-                println!("OK!!!!!!");
-                break;
-            }
-            // overrun
-            if pos > start_pos + property_length {
-                return Err(anyhow::anyhow!("Property Length Error"));
-            }
-            println!("Connect Property 0x{:x}", buf[pos]);
-            match buf[pos] {
-                0x11 => {
-                    self.properties.session_expiry_interval = u32::from_be_bytes(
-                        buf[pos + 1..pos + 5]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                    );
-                    pos = pos + 5;
-                    println!("0x11, {}", self.properties.session_expiry_interval)
-                }
-                0x21 => {
-                    self.properties.receive_maximum = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                    );
-                    pos = pos + 3;
-                    println!("0x21, {}", self.properties.receive_maximum);
-                }
-                0x27 => {
-                    self.properties.maximum_packet_size = u32::from_be_bytes(
-                        buf[pos + 1..pos + 5]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                    );
-                    pos = pos + 5;
-                }
-                0x22 => {
-                    self.properties.topic_alias_maximum = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
-                    );
-                    pos = pos + 3;
-                    println!("0x22, {}", self.properties.topic_alias_maximum);
-                }
-                0x19 => {
-                    self.properties.request_response_information = (buf[pos + 1] & 0b1) == 0b1;
-                    pos = pos + 2;
-                }
-                0x17 => {
-                    self.properties.request_problem_infromation = (buf[pos + 1] & 0b1) == 0b1;
-                    pos = pos + 2;
-                }
-                0x26 => {
-                    println!("User property, debug");
-                    let (key, end_pos) = decode_utf8_string(&buf, pos + 1)?;
-                    println!("key: {}", key);
-                    let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
-                    println!("value: {}", key);
-                    self.properties.user_properties.push((key, value));
-                    pos = end_pos;
-                    println!("0x26, {:#?}", self.properties.user_properties)
-                }
-                0x15 => {
-                    match self.properties.authentication_method {
-                        Some(_) => {
-                            return Err(anyhow::anyhow!(
-                                "Protocol Error: Duplicateauthentication method"
-                            ));
-                        }
-                        None => {}
-                    };
-
-                    let (method, end_pos) = decode_utf8_string(buf, pos + 1)?;
-                    self.properties.authentication_method = Some(method);
-                    pos = end_pos;
-                }
-                0x16 => {
-                    match self.properties.authentication_data {
-                        Some(_) => {
-                            return Err(anyhow::anyhow!(
-                                "Protocol Error: Duplicateauthentication data"
-                            ));
-                        }
-                        None => {}
-                    };
-                    let length = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
-                    ) as usize;
-                    let data = &buf[pos + 3..pos + 3 + length];
-                    // copy
-                    self.properties.authentication_data = Some(bytes::Bytes::copy_from_slice(data));
-                    pos = pos + 3 + length;
-                }
-
-                code => return Err(anyhow::anyhow!("Unknown Connect Property 0x{:x}", code)),
-            }
-        }
-        return Ok(());
-    }
-    pub fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         /* client id */
         // payload
         println!("{:#04X?}", &buf[0..2]);
@@ -748,10 +611,10 @@ impl Connect {
         Ok(pos)
     }
 }
-
-impl Default for Connect {
-    fn default() -> Self {
+impl Connect {
+    fn new(remain_length: usize) -> Self {
         Self {
+            remain_length: remain_length,
             protocol_ver: ProtocolVersion::Other,
             clean_session: false,
             will: false,
@@ -769,15 +632,146 @@ impl Default for Connect {
             will_properties: WillProperties::default(),
         }
     }
-}
 
-pub struct Disconnect {}
+    fn parse_connect_flag(&mut self, b: u8) {
+        self.clean_session = (b & 0b00000010) == 0b00000010;
+        self.will = (b & 0b00000100) == 0b00000100;
+        self.will_qos = (b & 0b00011000) >> 3;
+        self.will_retain = (b & 0b00100000) == 0b00100000;
+        self.user_password_flag = (b & 0b01000000) == 0b01000000;
+        self.user_name_flag = (b & 0b10000000) == 0b10000000;
+    }
 
-impl Default for Disconnect {
-    fn default() -> Self {
-        Self {}
+    // return next position
+    fn parse_properties(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+        property_length: usize,
+    ) -> Result<(), anyhow::Error> {
+        let mut pos = start_pos;
+        loop {
+            //3 4 5 6 7 | 8
+            // start_pos = 3
+            // propety_length = 5
+            // pos = 8 -> OK
+            // pos means nextpos here.
+            if pos == start_pos + property_length {
+                println!("OK!!!!!!");
+                break;
+            }
+            // overrun
+            if pos > start_pos + property_length {
+                return Err(anyhow::anyhow!("Property Length Error"));
+            }
+            println!("Connect Property 0x{:x}", buf[pos]);
+            match buf[pos] {
+                0x11 => {
+                    self.properties.session_expiry_interval = u32::from_be_bytes(
+                        buf[pos + 1..pos + 5]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 5;
+                    println!("0x11, {}", self.properties.session_expiry_interval)
+                }
+                0x21 => {
+                    self.properties.receive_maximum = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 3;
+                    println!("0x21, {}", self.properties.receive_maximum);
+                }
+                0x27 => {
+                    self.properties.maximum_packet_size = u32::from_be_bytes(
+                        buf[pos + 1..pos + 5]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                    );
+                    pos = pos + 5;
+                }
+                0x22 => {
+                    self.properties.topic_alias_maximum = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
+                    );
+                    pos = pos + 3;
+                    println!("0x22, {}", self.properties.topic_alias_maximum);
+                }
+                0x19 => {
+                    self.properties.request_response_information = (buf[pos + 1] & 0b1) == 0b1;
+                    pos = pos + 2;
+                }
+                0x17 => {
+                    self.properties.request_problem_infromation = (buf[pos + 1] & 0b1) == 0b1;
+                    pos = pos + 2;
+                }
+                0x26 => {
+                    println!("User property, debug");
+                    let (key, end_pos) = decode_utf8_string(&buf, pos + 1)?;
+                    println!("key: {}", key);
+                    let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
+                    println!("value: {}", key);
+                    self.properties.user_properties.push((key, value));
+                    pos = end_pos;
+                    println!("0x26, {:#?}", self.properties.user_properties)
+                }
+                0x15 => {
+                    match self.properties.authentication_method {
+                        Some(_) => {
+                            return Err(anyhow::anyhow!(
+                                "Protocol Error: Duplicateauthentication method"
+                            ));
+                        }
+                        None => {}
+                    };
+
+                    let (method, end_pos) = decode_utf8_string(buf, pos + 1)?;
+                    self.properties.authentication_method = Some(method);
+                    pos = end_pos;
+                }
+                0x16 => {
+                    match self.properties.authentication_data {
+                        Some(_) => {
+                            return Err(anyhow::anyhow!(
+                                "Protocol Error: Duplicateauthentication data"
+                            ));
+                        }
+                        None => {}
+                    };
+                    let length = u16::from_be_bytes(
+                        buf[pos + 1..pos + 3]
+                            .try_into()
+                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
+                    ) as usize;
+                    let data = &buf[pos + 3..pos + 3 + length];
+                    // copy
+                    self.properties.authentication_data = Some(bytes::Bytes::copy_from_slice(data));
+                    pos = pos + 3 + length;
+                }
+
+                code => return Err(anyhow::anyhow!("Unknown Connect Property 0x{:x}", code)),
+            }
+        }
+        return Ok(());
     }
 }
+
+pub struct Disconnect {
+    remain_length: usize,
+}
+
+impl Disconnect {
+    fn new(remain_length: usize) -> Self {
+        Self {
+            remain_length: remain_length,
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub enum ProtocolVersion {
     V3,
@@ -787,31 +781,32 @@ pub enum ProtocolVersion {
     Other,
 }
 
-pub mod mqtt {
+pub mod parser {
     use super::{decode_variable_length, Connect, ControlPacket, Disconnect, MqttPacket};
     use anyhow;
     // (, consumed size)
-    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<(MqttPacket, usize), anyhow::Error> {
+    pub fn parse_fixed_header(
+        buf: &bytes::BytesMut,
+    ) -> Result<(ControlPacket, usize), anyhow::Error> {
         println!("{:#b}", buf[0]);
-        let mut consumed_bytes = 0;
-        let packet: MqttPacket = match buf[0] >> 4 {
+        match buf[0] >> 4 {
             0b0001 => {
                 let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
                 println!("remain :{}", remaining_length);
-                consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
+                let consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
 
-                MqttPacket {
-                    control_packet: ControlPacket::CONNECT(Connect::default()),
-                    remaining_length: remaining_length,
-                }
+                return Result::Ok((
+                    ControlPacket::CONNECT(Connect::new(remaining_length)),
+                    consumed_bytes,
+                ));
             }
             0b1110 => {
                 let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
-                consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
-                MqttPacket {
-                    control_packet: ControlPacket::DISCONNECT(Disconnect::default()),
-                    remaining_length: 0,
-                }
+                let consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
+                return Result::Ok((
+                    ControlPacket::DISCONNECT(Disconnect::new(remaining_length)),
+                    consumed_bytes,
+                ));
             }
             control_type => {
                 return Err(anyhow::anyhow!(
@@ -820,7 +815,6 @@ pub mod mqtt {
                 ))
             }
         };
-        return Result::Ok((packet, consumed_bytes));
     }
 }
 
@@ -828,7 +822,7 @@ pub mod mqtt {
 mod tests {
     use bytes::Buf;
 
-    use super::mqtt::*;
+    use super::parser::*;
     use crate::mqtt::ControlPacket;
     use crate::mqtt::*;
     fn decode_hex(str: &str) -> bytes::BytesMut {
@@ -869,7 +863,7 @@ mod tests {
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
-        if let ControlPacket::CONNECT(mut connect) = packet.control_packet {
+        if let ControlPacket::CONNECT(mut connect) = packet {
             // variable header
             let ret = connect.parse_variable_header(&b);
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
@@ -918,7 +912,7 @@ mod tests {
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
-        if let ControlPacket::CONNECT(mut connect) = packet.control_packet {
+        if let ControlPacket::CONNECT(mut connect) = packet {
             let ret = connect.parse_variable_header(&b);
             println!("Hello");
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
@@ -1005,6 +999,7 @@ mod tests {
         */
         let expected: &[u8] = &[0x20, 0x03, 0x00, 0x00, 0x00];
         let mut connack = Connack {
+            remaining_length: 0,
             acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::Success,
@@ -1024,6 +1019,7 @@ mod tests {
         */
         let expected: &[u8] = &[0x20, 0x03, 0x00, 0x87, 0x00];
         let mut connack = Connack {
+            remaining_length: 0,
             acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::NotAuthorized,
@@ -1053,6 +1049,7 @@ mod tests {
         p.session_expiry_interval = Some(3600);
         p.maximum_packet_size = Some(10);
         let mut connack = Connack {
+            remaining_length: 0,
             acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::Success,
