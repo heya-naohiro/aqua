@@ -3,7 +3,6 @@ use futures_util::Stream;
 use mqtt::ControlPacket;
 use mqtt::{parser::parse_fixed_header, MqttError, MqttPacket};
 use pin_project::pin_project;
-use std::any;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 mod mqtt;
@@ -117,6 +116,7 @@ where
                             Ok(advance_bytes) => {
                                 this.buffer.advance(advance_bytes);
                                 variable_header_length = advance_bytes;
+                                state = State::WaitPayload;
                             }
                             Err(e) => {
                                 if let Some(_insufficient) = e.downcast_ref::<MqttError>() {
@@ -172,3 +172,11 @@ where
 }
 
 // [TODO] テストを書く
+// Streamのテスト？？？
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        assert_eq!(2 + 2, 4);
+    }
+}
