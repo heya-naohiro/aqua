@@ -1,5 +1,6 @@
 use bytes::{Buf, BytesMut};
 use futures_util::Stream;
+use mqtt::ControlPacket;
 use mqtt::{parser::parse_fixed_header, MqttError, MqttPacket};
 use pin_project::pin_project;
 use std::any;
@@ -10,7 +11,7 @@ mod mqtt;
 //元の(tcp)Streamを受け取ってMQTTStreamに変換する
 
 // output: definition of stream
-type MqttStreamResult = Result<mqtt::MqttPacket, anyhow::Error>;
+type MqttStreamResult = Result<mqtt::ControlPacket, anyhow::Error>;
 
 // input
 type StreamItem = Result<bytes::Bytes, std::io::Error>;
@@ -60,7 +61,7 @@ where
         // headerのlengthがわかるまで待つ
         // headerを全部読むまで待つ
         // lengthが貯まるまで待つ or 流す
-        let mut tmp_mqtt_packet: Option<MqttPacket> = None;
+        let mut tmp_mqtt_packet: Option<ControlPacket> = None;
         let mut state = State::WaitFixedHeader;
         let mut request_buffer = 0;
         loop {
@@ -101,26 +102,36 @@ where
                     }
                 },
                 State::WaitVariableHeader => {
-                    // bufferにリクエスト分だけデータがあるか確かめる
                     if let Some(ref mut packet) = tmp_mqtt_packet {
-                        if packet.remaining_length > this.buffer.len() {
+                        // bufferにリクエスト分だけデータがあるか確かめる
+                        if packet.remain_length() > this.buffer.len() {
                             return Poll::Pending;
                         }
-                        // [TODO] ControlPacketに含まれるメソッドのTrait化
-                        match &mut packet.control_packet {
+                        let result = match packet {
                             mqtt::ControlPacket::CONNECT(connect) => {
-                                let connect.parse_variable_header(&this.buffer);
-                                // Error処理 advance
+                                connect.parse_variable_header(&this.buffer)
                             }
                             mqtt::ControlPacket::DISCONNECT(disconnect) => todo!(),
                             mqtt::ControlPacket::CONNACK(connack) => todo!(),
+                        };
+                        // Error handling
+                        match result {
+                            Ok(advance_bytes) => {
+                                this.buffer.advance(advance_bytes);
+                            }
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(anyhow::anyhow!(e))));
+                            }
                         }
                     } else {
                         // Error, internal error not found packet
+                        return Poll::Ready(Some(Err(anyhow::anyhow!(
+                            "internal error not found packet: WaitVariableHeader"
+                        ))));
                     }
                 }
                 State::WaitPayload => {
-                    // bufferにリクエスト分だけデータがあるか確かめる（？）
+                    // bufferにリクエスト分だけデータがあるか確かめるかどうかはパケットの種類次第だと思う
                 }
             }
         }

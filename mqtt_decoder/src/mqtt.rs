@@ -29,6 +29,7 @@ pub enum ControlPacket {
 pub trait MqttPacket {
     fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
     fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
+    fn remain_length(&self) -> usize;
 }
 
 impl MqttPacket for ControlPacket {
@@ -42,6 +43,12 @@ impl MqttPacket for ControlPacket {
         match self {
             ControlPacket::CONNECT(p) => p.parse_variable_header(buf),
             _ => Err(anyhow::anyhow!("Not Implemented")),
+        }
+    }
+    fn remain_length(&self) -> usize {
+        match self {
+            ControlPacket::CONNECT(p) => p.remain_length,
+            _ => 0,
         }
     }
 }
@@ -609,6 +616,10 @@ impl MqttPacket for Connect {
         }
 
         Ok(pos)
+    }
+
+    fn remain_length(&self) -> usize {
+        self.remain_length
     }
 }
 impl Connect {
