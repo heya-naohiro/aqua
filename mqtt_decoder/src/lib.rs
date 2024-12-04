@@ -63,7 +63,7 @@ where
         // lengthが貯まるまで待つ or 流す
         let mut tmp_mqtt_packet: Option<ControlPacket> = None;
         let mut state = State::WaitFixedHeader;
-        let mut request_buffer = 0;
+        let mut variable_header_length = 0;
         loop {
             // あるだけ読み込む
             match this.stream.as_mut().poll_next(cx) {
@@ -103,10 +103,7 @@ where
                 },
                 State::WaitVariableHeader => {
                     if let Some(ref mut packet) = tmp_mqtt_packet {
-                        // bufferにリクエスト分だけデータがあるか確かめる
-                        if packet.remain_length() > this.buffer.len() {
-                            return Poll::Pending;
-                        }
+                        // bufferにリクエスト分だけデータがあるか確かめることはしない代わりにエラーをハンドルする
                         let result = match packet {
                             mqtt::ControlPacket::CONNECT(connect) => {
                                 connect.parse_variable_header(&this.buffer)
@@ -114,13 +111,20 @@ where
                             mqtt::ControlPacket::DISCONNECT(disconnect) => todo!(),
                             mqtt::ControlPacket::CONNACK(connack) => todo!(),
                         };
+
                         // Error handling
                         match result {
                             Ok(advance_bytes) => {
                                 this.buffer.advance(advance_bytes);
+                                variable_header_length = advance_bytes;
                             }
                             Err(e) => {
-                                return Poll::Ready(Some(Err(anyhow::anyhow!(e))));
+                                if let Some(_insufficient) = e.downcast_ref::<MqttError>() {
+                                    // Insufficientの場合は何もせずに非同期ランタイムに委ねる
+                                    return Poll::Pending;
+                                } else {
+                                    return Poll::Ready(Some(Err(e)));
+                                }
                             }
                         }
                     } else {
@@ -132,8 +136,39 @@ where
                 }
                 State::WaitPayload => {
                     // bufferにリクエスト分だけデータがあるか確かめるかどうかはパケットの種類次第だと思う
+                    if let Some(ref mut packet) = tmp_mqtt_packet {
+                        // bufferにリクエスト分だけデータがあるか確かめる
+                        // 読むべきバイト数 > バッファーにあるバイト数
+                        if packet.remain_length() - variable_header_length > this.buffer.len() {
+                            return Poll::Pending;
+                        }
+                        let result = match packet {
+                            mqtt::ControlPacket::CONNECT(connect) => {
+                                connect.parse_payload(&this.buffer)
+                            }
+                            mqtt::ControlPacket::DISCONNECT(disconnect) => todo!(),
+                            mqtt::ControlPacket::CONNACK(connack) => todo!(),
+                        };
+                        // Error handling
+                        match result {
+                            Ok(advance_bytes) => {
+                                this.buffer.advance(advance_bytes);
+                                state = State::WaitFixedHeader;
+                            }
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        }
+                    } else {
+                        // Error, internal error not found packet
+                        return Poll::Ready(Some(Err(anyhow::anyhow!(
+                            "internal error not found packet: WaitPayload"
+                        ))));
+                    }
                 }
             }
         }
     }
 }
+
+// [TODO] テストを書く
