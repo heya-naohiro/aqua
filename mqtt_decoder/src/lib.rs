@@ -175,8 +175,58 @@ where
 // Streamのテスト？？？
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    use std::io;
+
+    use super::*;
+    use async_stream::stream;
+    use bytes::Bytes;
+    use futures::{Stream, StreamExt};
+    use tokio;
+
+    fn async_byte_stream(
+        data: &str,
+        chunk_size: usize,
+    ) -> impl Stream<Item = Result<Bytes, io::Error>> {
+        let byte = data.as_bytes().to_vec();
+        stream! {
+            for chunk in byte.chunks(chunk_size) {
+                yield Ok(Bytes::copy_from_slice(chunk));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_connect() {
+        let input1 = "101800044d5154540502003c00000b7075626c6973682d353439";
+        let input2 = "10bd0200044d51545405ce003c7c110000007\
+        81500136578616d706c655f617574685f6d6574686f6416001\
+        16578616d706c655f617574685f64617461170119012100142\
+        2000a26000c636f6e6e6563745f6b657931000e636f6e6e656\
+        3745f76616c75653126000c636f6e6e6563745f6b657932000\
+        e636f6e6e6563745f76616c7565322700040000000b7075626\
+        c6973682d373130710101020000001e03000a746578742f706\
+        c61696e08000d746573742f726573706f6e7365090018636f7\
+        272656c6174696f6e5f646174615f6578616d706c651800000\
+        00a2600046b657931000676616c7565312600046b657932000\
+        676616c7565322600046b657933000676616c7565330009746\
+        573742f77696c6c000c57696c6c206d657373616765000d796\
+        f75725f757365726e616d65000d796f75725f70617373776f7264";
+
+        let input = format!("{}{}", input1, input2);
+        let chunk_size = 10;
+        let stream = async_byte_stream(&input, chunk_size);
+        let stream = Box::pin(stream);
+        let mut results = Vec::new();
+
+        let mut mqtt_stream = MqttStream::new(stream);
+        while let Some(item) = mqtt_stream.next().await {
+            match item {
+                Ok(value) => results.push(value),
+                Err(e) => {
+                    panic!("Error: {}", e);
+                }
+            }
+        }
+        // assert
     }
 }
