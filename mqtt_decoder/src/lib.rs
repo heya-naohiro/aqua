@@ -54,6 +54,8 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut this = self.project();
+        dbg!("poll next!!!");
+
         // ここのロジックを考える,図にする。
         // ----
         // bytesを待つ
@@ -121,6 +123,7 @@ where
                             Err(e) => {
                                 if let Some(_insufficient) = e.downcast_ref::<MqttError>() {
                                     // Insufficientの場合は何もせずに非同期ランタイムに委ねる
+                                    dbg!("downcast!!!");
                                     return Poll::Pending;
                                 } else {
                                     return Poll::Ready(Some(Err(e)));
@@ -181,24 +184,29 @@ mod tests {
     use async_stream::stream;
     use bytes::Bytes;
     use futures::{Stream, StreamExt};
+    use hex::decode;
     use tokio;
 
     fn async_byte_stream(
-        data: &str,
+        data: Vec<u8>,
         chunk_size: usize,
     ) -> impl Stream<Item = Result<Bytes, io::Error>> {
-        let byte = data.as_bytes().to_vec();
+        let byte = data;
         stream! {
             for chunk in byte.chunks(chunk_size) {
                 yield Ok(Bytes::copy_from_slice(chunk));
             }
         }
     }
-
+    fn decode_hex(str: &str) -> bytes::BytesMut {
+        let decoded = hex::decode(str).unwrap();
+        bytes::BytesMut::from(&decoded[..])
+    }
     #[tokio::test]
     async fn connect_connect() {
-        let input1 = "101800044d5154540502003c00000b7075626c6973682d353439";
-        let input2 = "10bd0200044d51545405ce003c7c110000007\
+        let mut input1 = decode_hex("101800044d5154540502003c00000b7075626c6973682d353439");
+        let input2 = decode_hex(
+            "10bd0200044d51545405ce003c7c110000007\
         81500136578616d706c655f617574685f6d6574686f6416001\
         16578616d706c655f617574685f64617461170119012100142\
         2000a26000c636f6e6e6563745f6b657931000e636f6e6e656\
@@ -210,11 +218,11 @@ mod tests {
         00a2600046b657931000676616c7565312600046b657932000\
         676616c7565322600046b657933000676616c7565330009746\
         573742f77696c6c000c57696c6c206d657373616765000d796\
-        f75725f757365726e616d65000d796f75725f70617373776f7264";
-
-        let input = format!("{}{}", input1, input2);
+        f75725f757365726e616d65000d796f75725f70617373776f7264",
+        );
+        input1.extend_from_slice(&input2);
         let chunk_size = 10;
-        let stream = async_byte_stream(&input, chunk_size);
+        let stream = async_byte_stream(input1.to_vec(), chunk_size);
         let stream = Box::pin(stream);
         let mut results = Vec::new();
 

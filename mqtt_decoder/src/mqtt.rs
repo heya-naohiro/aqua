@@ -356,6 +356,9 @@ pub fn decode_utf8_string(
 ) -> Result<(String, usize), anyhow::Error> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
     println!("length: {}", length);
+    if start_pos + 2 + length > buf.len() {
+        return Err(MqttError::InsufficientBytes.into());
+    }
     let str = match std::str::from_utf8(&buf[start_pos + 2..start_pos + 2 + length]) {
         Ok(v) => v,
         Err(_) => return Err(anyhow::anyhow!("Protocol Error: Invalid utf8")),
@@ -668,7 +671,6 @@ impl Connect {
             // pos = 8 -> OK
             // pos means nextpos here.
             if pos == start_pos + property_length {
-                println!("OK!!!!!!");
                 break;
             }
             // overrun
