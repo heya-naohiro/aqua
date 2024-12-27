@@ -41,6 +41,7 @@ where
             buffer: BytesMut::new(),
         }
     }
+    fn push_data(&mut self, data: Vec<u8>) {}
 }
 
 //続き https://synamon.hatenablog.com/entry/rust_stream_entry
@@ -95,8 +96,8 @@ where
                     Err(e) => {
                         // [TODO] Errorの洗練
                         if let Some(_insufficient) = e.downcast_ref::<MqttError>() {
-                            // warning
-                            continue;
+                            // return Poll::Pending;
+                            return Poll::Pending;
                         } else {
                             return Poll::Ready(Some(Err(e)));
                         }
@@ -189,7 +190,7 @@ mod tests {
 
     fn async_byte_stream(
         data: Vec<u8>,
-        chunk_size: usize,
+        chunk_size: Vec<usize>,
     ) -> impl Stream<Item = Result<Bytes, io::Error>> {
         let byte = data;
         stream! {

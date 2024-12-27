@@ -2,19 +2,22 @@ use anyhow::Result;
 use bytes::BufMut;
 use std::u16;
 use thiserror::Error;
+use tower::retry::backoff::InvalidBackoff;
 
 #[derive(Debug, Error)]
 pub enum MqttError {
     #[error("Insufficient Bytes")]
     InsufficientBytes,
+    #[error("Decode Error Invalid Parameter")]
+    DecodeError,
 }
 
 pub enum ControlPacket {
     CONNECT(Connect),
     DISCONNECT(Disconnect),
     CONNACK(Connack),
-    /*
     PUBLISH(Publish),
+    /*
     PUBACK(Puback),
     PUBREC(Pubrec),
     PUBREL(Pubrel),
@@ -36,18 +39,21 @@ impl MqttPacket for ControlPacket {
     fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         match self {
             ControlPacket::CONNECT(p) => p.parse_payload(buf),
+            ControlPacket::PUBLISH(p) => p.parse_payload(buf),
             _ => Err(anyhow::anyhow!("Not Implemented")),
         }
     }
     fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         match self {
             ControlPacket::CONNECT(p) => p.parse_variable_header(buf),
+            ControlPacket::PUBLISH(p) => p.parse_variable_header(buf),
             _ => Err(anyhow::anyhow!("Not Implemented")),
         }
     }
     fn remain_length(&self) -> usize {
         match self {
             ControlPacket::CONNECT(p) => p.remain_length,
+            ControlPacket::PUBLISH(p) => p.remain_length,
             _ => 0,
         }
     }
@@ -241,6 +247,62 @@ impl Connack {
 }
 
 #[derive(PartialEq, Debug)]
+pub struct Publish {
+    pub remain_length: usize,
+    pub dup: bool,
+    pub qos: QoS,
+    pub retain: Retain,
+    pub topic_name: Option<TopicName>,
+    pub pub_properties: Vec<PublishProperties>,
+    pub packet_id: PacketId, /* 2byte integer */
+}
+
+// [TODO] ConnectProperties / WillPropertyもこうする
+#[derive(Debug, PartialEq)]
+enum PublishProperties {
+    PayloadFormatIndicator(PayloadFormatIndicator),
+    MessageExpiryInterval(MessageExpiryInterval),
+    TopicAlias(TopicAlias),
+    ResponseTopic(ResponseTopic),
+    CorrelationData(CorrelationData),
+    UserProperty(UserProperty),
+    SubscriptionIdentifier(SubscriptionIdentifier),
+    ContentType(ContentType),
+}
+
+type PayloadFormatIndicator = bool;
+type MessageExpiryInterval = u32;
+type TopicAlias = u16;
+type ResponseTopic = String;
+type CorrelationData = bytes::Bytes;
+type UserProperty = Vec<(String, String)>;
+type SubscriptionIdentifier = u32;
+type ContentType = String;
+
+type Retain = bool;
+type PacketId = u16;
+type TopicName = String;
+
+#[derive(PartialEq, Debug)]
+enum QoS {
+    QoS0,
+    QoS1,
+    QoS2,
+}
+
+impl TryFrom<u8> for QoS {
+    type Error = MqttError;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(QoS::QoS0),
+            1 => Ok(QoS::QoS1),
+            2 => Ok(QoS::QoS2),
+            _ => Err(MqttError::DecodeError),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug)]
 pub struct Connect {
     pub remain_length: usize,
     pub protocol_ver: ProtocolVersion,
@@ -356,9 +418,11 @@ pub fn decode_utf8_string(
 ) -> Result<(String, usize), anyhow::Error> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
     println!("length: {}", length);
+
     if start_pos + 2 + length > buf.len() {
         return Err(MqttError::InsufficientBytes.into());
     }
+
     let str = match std::str::from_utf8(&buf[start_pos + 2..start_pos + 2 + length]) {
         Ok(v) => v,
         Err(_) => return Err(anyhow::anyhow!("Protocol Error: Invalid utf8")),
@@ -402,6 +466,36 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
     }
     remaining_length
 }
+
+impl MqttPacket for Publish {
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+        let mut consumed_length = 0;
+        // topic name UTF-8 Encoded String
+        let (topic_name, next_pos) = decode_utf8_string(buf, 0)?;
+        self.topic_name = Some(topic_name);
+        consumed_length = next_pos;
+
+        // packet identifier
+        if self.qos == QoS::QoS1 || self.qos == QoS::QoS2 {
+            // check
+            if buf.len() < next_pos + 1 {
+                return Err(MqttError::InsufficientBytes.into());
+            }
+            self.packet_id = ((buf[next_pos] as u16) << 8) + buf[next_pos + 1] as u16;
+            consumed_length = consumed_length + 2;
+        }
+        Ok(consumed_length)
+    }
+
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+        todo!();
+    }
+
+    fn remain_length(&self) -> usize {
+        todo!();
+    }
+}
+
 impl MqttPacket for Connect {
     // return consumed length
     fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
