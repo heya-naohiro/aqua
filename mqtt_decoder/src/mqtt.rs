@@ -1,15 +1,12 @@
-use anyhow::Result;
 use bytes::BufMut;
-use std::u16;
 use thiserror::Error;
-use tower::retry::backoff::InvalidBackoff;
 
 #[derive(Debug, Error)]
 pub enum MqttError {
     #[error("Insufficient Bytes")]
     InsufficientBytes,
     #[error("Decode Error Invalid Parameter")]
-    DecodeError,
+    InvalidFormat,
 }
 
 pub enum ControlPacket {
@@ -270,18 +267,121 @@ enum PublishProperties {
     ContentType(ContentType),
 }
 
-type PayloadFormatIndicator = bool;
-type MessageExpiryInterval = u32;
-type TopicAlias = u16;
-type ResponseTopic = String;
-type CorrelationData = bytes::Bytes;
-type UserProperty = Vec<(String, String)>;
-type SubscriptionIdentifier = u32;
-type ContentType = String;
+enum PayloadFormatIndicator {
+    UnspecifiedBytes,
+    UTF8,
+}
 
-type Retain = bool;
-type PacketId = u16;
-type TopicName = String;
+impl PayloadFormatIndicator {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        match buf[start_pos] {
+            0x00 => Ok((PayloadFormatIndicator::UnspecifiedBytes, start_pos + 1)),
+            0x01 => Ok((PayloadFormatIndicator::UTF8, start_pos + 1)),
+            _ => Err(MqttError::InvalidFormat),
+        }
+    }
+}
+
+struct MessageExpiryInterval(u32);
+impl MessageExpiryInterval {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = u32::from_be_bytes(
+            buf[start_pos..start_pos + 4]
+                .try_into()
+                .map_err(|_| MqttError::InvalidFormat)?,
+        );
+        return Ok((MessageExpiryInterval(i), start_pos + 4));
+    }
+}
+
+struct TopicAlias(u16);
+impl TopicAlias {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = (buf[start_pos] as u16) << 8 + (buf[start_pos + 1] as u16);
+        if i == 0 {
+            return Err(MqttError::InvalidFormat);
+        }
+        Ok((TopicAlias(i), start_pos + 2))
+    }
+}
+
+/*
+ サイズを返す場合は一貫して次の絶対位置で返す
+*/
+struct ResponseTopic(String);
+impl ResponseTopic {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (res, pos) = decode_utf8_string(buf, start_pos)?;
+        Ok((ResponseTopic(res), pos))
+    }
+}
+
+struct CorrelationData(bytes::Bytes);
+impl CorrelationData {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        // [TODO] u16 length
+        let length = ((buf[start_pos] as usize) << 8) + buf[start_pos + 1] as usize;
+        // [TODO] length分だけコピー
+        return Ok((
+            CorrelationData(bytes::Bytes::copy_from_slice(
+                &buf[start_pos + 2..start_pos + 2 + length],
+            )),
+            start_pos + 2 + length,
+        ));
+    }
+}
+struct UserProperty((String, String));
+impl UserProperty {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (key, next_pos) = decode_utf8_string(buf, start_pos)?;
+        let (value, next_pos) = decode_utf8_string(buf, next_pos)?;
+        Ok((UserProperty((key, value)), next_pos))
+    }
+}
+
+struct SubscriptionIdentifier(u32);
+impl SubscriptionIdentifier {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = u32::from_be_bytes(
+            buf[start_pos..start_pos + 4]
+                .try_into()
+                .map_err(|_| MqttError::InvalidFormat)?,
+        );
+        return Ok((SubscriptionIdentifier(i), start_pos + 4));
+    }
+}
+
+struct ContentType(String);
+impl ContentType {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (res, pos) = decode_utf8_string(buf, start_pos)?;
+        Ok((ContentType(res), pos))
+    }
+}
 
 #[derive(PartialEq, Debug)]
 enum QoS {
@@ -297,7 +397,7 @@ impl TryFrom<u8> for QoS {
             0 => Ok(QoS::QoS0),
             1 => Ok(QoS::QoS1),
             2 => Ok(QoS::QoS2),
-            _ => Err(MqttError::DecodeError),
+            _ => Err(MqttError::InvalidFormat),
         }
     }
 }
@@ -390,7 +490,10 @@ fn bool_to_bytes(b: bool) -> &'static [u8] {
     }
 }
 
-pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32> {
+pub fn decode_u32_bytes(
+    buf: &bytes::BytesMut,
+    start_pos: usize,
+) -> std::result::Result<u32, MqttError> {
     Ok(u32::from_be_bytes(
         buf[start_pos..start_pos + 4]
             .try_into()
@@ -398,15 +501,18 @@ pub fn decode_u32_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u32> 
     ))
 }
 
-pub fn decode_u16_bytes(buf: &bytes::BytesMut, start_pos: usize) -> Result<u16> {
+pub fn decode_u16_bytes(
+    buf: &bytes::BytesMut,
+    start_pos: usize,
+) -> std::result::Result<u16, MqttError> {
     Ok(u16::from_be_bytes(
         buf[start_pos..start_pos + 2]
             .try_into()
-            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+            .map_err(|_| MqttError::InvalidFormat)?,
     ))
 }
 
-pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32> {
+pub fn decode_u32_bytes_sliced(v: &[u8]) -> std::result::Result<u32, MqttError> {
     Ok(u32::from_be_bytes(v.try_into().map_err(|_| {
         anyhow::Error::msg("Invalid slice length for u32")
     })?))
@@ -415,7 +521,7 @@ pub fn decode_u32_bytes_sliced(v: &[u8]) -> Result<u32> {
 pub fn decode_utf8_string(
     buf: &bytes::BytesMut,
     start_pos: usize,
-) -> Result<(String, usize), anyhow::Error> {
+) -> Result<(String, usize), MqttError> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
     println!("length: {}", length);
 
@@ -425,7 +531,7 @@ pub fn decode_utf8_string(
 
     let str = match std::str::from_utf8(&buf[start_pos + 2..start_pos + 2 + length]) {
         Ok(v) => v,
-        Err(_) => return Err(anyhow::anyhow!("Protocol Error: Invalid utf8")),
+        Err(_) => return Err(MqttError::InvalidFormat),
     };
     Ok((str.to_string(), start_pos + 2 + length))
 }
@@ -471,7 +577,7 @@ impl MqttPacket for Publish {
     fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
         let mut consumed_length = 0;
         // topic name UTF-8 Encoded String
-        let (topic_name, next_pos) = decode_utf8_string(buf, 0)?;
+        let (topic_name, mut next_pos) = decode_utf8_string(buf, 0)?;
         self.topic_name = Some(topic_name);
         consumed_length = next_pos;
 
@@ -483,7 +589,10 @@ impl MqttPacket for Publish {
             }
             self.packet_id = ((buf[next_pos] as u16) << 8) + buf[next_pos + 1] as u16;
             consumed_length = consumed_length + 2;
+            next_pos = next_pos + 2;
         }
+        // Properties
+
         Ok(consumed_length)
     }
 
@@ -817,11 +926,8 @@ impl Connect {
                     pos = pos + 2;
                 }
                 0x26 => {
-                    println!("User property, debug");
                     let (key, end_pos) = decode_utf8_string(&buf, pos + 1)?;
-                    println!("key: {}", key);
                     let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
-                    println!("value: {}", key);
                     self.properties.user_properties.push((key, value));
                     pos = end_pos;
                     println!("0x26, {:#?}", self.properties.user_properties)
