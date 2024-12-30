@@ -7,6 +7,8 @@ pub enum MqttError {
     InsufficientBytes,
     #[error("Decode Error Invalid Parameter")]
     InvalidFormat,
+    #[error("Not Implemented")]
+    NotImplemented,
 }
 
 pub enum ControlPacket {
@@ -27,24 +29,24 @@ pub enum ControlPacket {
 }
 
 pub trait MqttPacket {
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error>;
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError>;
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError>;
     fn remain_length(&self) -> usize;
 }
 
 impl MqttPacket for ControlPacket {
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
         match self {
             ControlPacket::CONNECT(p) => p.parse_payload(buf),
             ControlPacket::PUBLISH(p) => p.parse_payload(buf),
-            _ => Err(anyhow::anyhow!("Not Implemented")),
+            _ => Err(MqttError::NotImplemented),
         }
     }
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
         match self {
             ControlPacket::CONNECT(p) => p.parse_variable_header(buf),
             ControlPacket::PUBLISH(p) => p.parse_variable_header(buf),
-            _ => Err(anyhow::anyhow!("Not Implemented")),
+            _ => Err(MqttError::NotImplemented),
         }
     }
     fn remain_length(&self) -> usize {
@@ -250,13 +252,36 @@ pub struct Publish {
     pub qos: QoS,
     pub retain: Retain,
     pub topic_name: Option<TopicName>,
-    pub pub_properties: Vec<PublishProperties>,
+    pub pub_properties: PublishProperties,
     pub packet_id: PacketId, /* 2byte integer */
 }
 
+// Properties key
+const PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID: u8 = 0x01;
+const PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID: u8 = 0x02;
+const PROPERTY_TOPIC_ALIAS_ID: u8 = 0x23;
+const PROPERTY_RESPONSE_TOPIC_ID: u8 = 0x08;
+const PROPERTY_CORRELATION_DATA_ID: u8 = 0x09;
+const PROPERTY_USER_PROPERTY_ID: u8 = 0x26;
+const PROPERTY_SUBSCRIPTION_IDENTIFIER_ID: u8 = 0x0b;
+const PROPERTY_CONTENT_TYPE_ID: u8 = 0x03;
+
 // [TODO] ConnectProperties / WillPropertyもこうする
+#[derive(PartialEq, Debug)]
+struct PublishProperties {
+    payload_format_indicator: Option<PayloadFormatIndicator>,
+    message_expiry_interval: Option<MessageExpiryInterval>,
+    topic_alias: Option<TopicAlias>,
+    response_topic: Option<ResponseTopic>,
+    correlation_data: Option<CorrelationData>,
+    user_properties: Option<Vec<UserProperty>>,
+    subscription_identifier: Option<SubscriptionIdentifier>,
+    content_type: Option<ContentType>,
+}
+
 #[derive(Debug, PartialEq)]
-enum PublishProperties {
+#[repr(u8)]
+enum PublishProperty {
     PayloadFormatIndicator(PayloadFormatIndicator),
     MessageExpiryInterval(MessageExpiryInterval),
     TopicAlias(TopicAlias),
@@ -267,6 +292,7 @@ enum PublishProperties {
     ContentType(ContentType),
 }
 
+#[derive(Debug, PartialEq)]
 enum PayloadFormatIndicator {
     UnspecifiedBytes,
     UTF8,
@@ -285,6 +311,7 @@ impl PayloadFormatIndicator {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct MessageExpiryInterval(u32);
 impl MessageExpiryInterval {
     fn try_from(
@@ -300,6 +327,7 @@ impl MessageExpiryInterval {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct TopicAlias(u16);
 impl TopicAlias {
     fn try_from(
@@ -317,6 +345,7 @@ impl TopicAlias {
 /*
  サイズを返す場合は一貫して次の絶対位置で返す
 */
+#[derive(Debug, PartialEq)]
 struct ResponseTopic(String);
 impl ResponseTopic {
     fn try_from(
@@ -328,6 +357,7 @@ impl ResponseTopic {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct CorrelationData(bytes::Bytes);
 impl CorrelationData {
     fn try_from(
@@ -345,6 +375,8 @@ impl CorrelationData {
         ));
     }
 }
+
+#[derive(Debug, PartialEq)]
 struct UserProperty((String, String));
 impl UserProperty {
     fn try_from(
@@ -357,6 +389,7 @@ impl UserProperty {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct SubscriptionIdentifier(u32);
 impl SubscriptionIdentifier {
     fn try_from(
@@ -372,6 +405,7 @@ impl SubscriptionIdentifier {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct ContentType(String);
 impl ContentType {
     fn try_from(
@@ -574,7 +608,8 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
 }
 
 impl MqttPacket for Publish {
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    // next_positionを返す
+    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
         let mut consumed_length = 0;
         // topic name UTF-8 Encoded String
         let (topic_name, mut next_pos) = decode_utf8_string(buf, 0)?;
@@ -592,11 +627,72 @@ impl MqttPacket for Publish {
             next_pos = next_pos + 2;
         }
         // Properties
-
-        Ok(consumed_length)
+        let property_length;
+        (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+        // 9 | 10 11 12 13 14 | [ ]
+        let end_pos = next_pos + property_length;
+        loop {
+            if next_pos == end_pos {
+                break;
+            }
+            if next_pos > end_pos {
+                return Err(MqttError::InvalidFormat);
+            }
+            match buf[next_pos] {
+                PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
+                    let result;
+                    (result, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.payload_format_indicator = Some(result);
+                }
+                PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
+                    let result;
+                    (result, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.message_expiry_interval = Some(result);
+                }
+                PROPERTY_TOPIC_ALIAS_ID => {
+                    let result;
+                    (result, next_pos) = TopicAlias::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.topic_alias = Some(result);
+                }
+                PROPERTY_RESPONSE_TOPIC_ID => {
+                    let result;
+                    (result, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.response_topic = Some(result);
+                }
+                PROPERTY_CORRELATION_DATA_ID => {
+                    let result;
+                    (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.correlation_data = Some(result);
+                }
+                PROPERTY_USER_PROPERTY_ID => {
+                    let user_property;
+                    (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                    match self.pub_properties.user_properties {
+                        None => {
+                            self.pub_properties.user_properties = Some(vec![user_property]);
+                        }
+                        Some(mut up) => up.push(user_property),
+                    }
+                }
+                PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
+                    let result;
+                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.subscription_identifier = Some(result);
+                }
+                PROPERTY_CONTENT_TYPE_ID => {
+                    let result;
+                    (result, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
+                    self.pub_properties.content_type = Some(result);
+                }
+                _ => {
+                    return Err(MqttError::InvalidFormat);
+                }
+            }
+        }
+        return Ok(next_pos);
     }
 
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
         todo!();
     }
 
