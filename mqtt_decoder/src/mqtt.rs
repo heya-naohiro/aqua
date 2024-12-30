@@ -275,7 +275,7 @@ struct PublishProperties {
     response_topic: Option<ResponseTopic>,
     correlation_data: Option<CorrelationData>,
     user_properties: Option<Vec<UserProperty>>,
-    subscription_identifier: Option<SubscriptionIdentifier>,
+    subscription_identifier: Option<Vec<SubscriptionIdentifier>>, // Multiple Subscription Identifiers will be included
     content_type: Option<ContentType>,
 }
 
@@ -650,16 +650,28 @@ impl MqttPacket for Publish {
                     self.pub_properties.message_expiry_interval = Some(result);
                 }
                 PROPERTY_TOPIC_ALIAS_ID => {
+                    // It is a Protocol Error to include the Topic Alias value more than once.
+                    if self.pub_properties.topic_alias == None {
+                        return Err(MqttError::InvalidFormat);
+                    }
                     let result;
                     (result, next_pos) = TopicAlias::try_from(buf, next_pos + 1)?;
                     self.pub_properties.topic_alias = Some(result);
                 }
                 PROPERTY_RESPONSE_TOPIC_ID => {
+                    // It is a Protocol Error to include the Topic Alias value more than once.
+                    if self.pub_properties.response_topic == None {
+                        return Err(MqttError::InvalidFormat);
+                    }
                     let result;
                     (result, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
                     self.pub_properties.response_topic = Some(result);
                 }
                 PROPERTY_CORRELATION_DATA_ID => {
+                    // It is a Protocol Error to include the Topic Alias value more than once.
+                    if self.pub_properties.correlation_data == None {
+                        return Err(MqttError::InvalidFormat);
+                    }
                     let result;
                     (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
                     self.pub_properties.correlation_data = Some(result);
@@ -675,11 +687,26 @@ impl MqttPacket for Publish {
                     }
                 }
                 PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
-                    let result;
-                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.subscription_identifier = Some(result);
+                    match self.pub_properties.subscription_identifier {
+                        Some(mut si) => {
+                            let result;
+                            (result, next_pos) =
+                                SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                            si.push(result);
+                        }
+                        None => {
+                            let result;
+                            (result, next_pos) =
+                                SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                            self.pub_properties.subscription_identifier = Some(vec![result]);
+                        }
+                    }
                 }
                 PROPERTY_CONTENT_TYPE_ID => {
+                    // It is a Protocol Error to include the Content Type more than once.
+                    if self.pub_properties.content_type == None {
+                        return Err(MqttError::InvalidFormat);
+                    }
                     let result;
                     (result, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
                     self.pub_properties.content_type = Some(result);
