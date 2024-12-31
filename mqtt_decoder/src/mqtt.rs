@@ -134,7 +134,7 @@ pub struct ConnackProperties {
 }
 
 impl ConnackProperties {
-    fn build_bytes(&mut self) -> Result<bytes::Bytes> {
+    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
         let mut buf = bytes::BytesMut::new();
 
         if let Some(c) = self.session_expiry_interval {
@@ -222,7 +222,7 @@ impl ConnackProperties {
 }
 
 impl Connack {
-    fn build_bytes(&mut self) -> Result<bytes::Bytes> {
+    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
         let mut properties_len = 0;
         let mut properties_bytes = bytes::Bytes::new();
         if let Some(connack_properties) = &mut self.connack_properties {
@@ -273,7 +273,10 @@ pub struct Publish {
 }
 
 #[derive(Debug, PartialEq)]
-struct TopicName(String);
+struct Retain(bool); // fixed header
+
+#[derive(Debug, PartialEq)]
+struct TopicName(String); // variable header
 
 impl TopicName {
     fn try_from(
@@ -292,6 +295,10 @@ impl PacketId {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
+        Ok((
+            PacketId(((buf[start_pos] as u16) << 8) + buf[start_pos + 1] as u16),
+            2,
+        ))
     }
 }
 
@@ -570,7 +577,7 @@ pub fn decode_u32_bytes(
     Ok(u32::from_be_bytes(
         buf[start_pos..start_pos + 4]
             .try_into()
-            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+            .map_err(|_| MqttError::InvalidFormat)?,
     ))
 }
 
@@ -586,9 +593,9 @@ pub fn decode_u16_bytes(
 }
 
 pub fn decode_u32_bytes_sliced(v: &[u8]) -> std::result::Result<u32, MqttError> {
-    Ok(u32::from_be_bytes(v.try_into().map_err(|_| {
-        anyhow::Error::msg("Invalid slice length for u32")
-    })?))
+    Ok(u32::from_be_bytes(
+        v.try_into().map_err(|_| MqttError::InvalidFormat)?,
+    ))
 }
 
 pub fn decode_utf8_string(
@@ -753,7 +760,11 @@ impl MqttPacket for Publish {
         return Ok(next_pos);
     }
 
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
+    fn parse_payload(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
         todo!();
     }
 
@@ -768,7 +779,7 @@ impl MqttPacket for Connect {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
-    ) -> Result<usize, anyhow::Error> {
+    ) -> Result<usize, MqttError> {
         let mut consumed_length = 0;
         let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
         println!("variable header: Variable length: {}", protocol_length);
@@ -785,7 +796,7 @@ impl MqttPacket for Connect {
                 self.protocol_ver = ProtocolVersion::V3_1_1;
             } else {
                 // Error
-                return Err(anyhow::anyhow!("Connect Protocol Header Error, length 4"));
+                return Err(MqttError::InvalidFormat);
             }
             self.parse_connect_flag(buf[7]);
             self.keepalive_timer = byte_pair_to_u16(buf[8], buf[9]);
@@ -803,15 +814,13 @@ impl MqttPacket for Connect {
                 self.protocol_ver = ProtocolVersion::V3_1;
             } else {
                 // Error
-                return Err(anyhow::anyhow!("Connect Protocol Header Error, length 6"));
+                return Err(MqttError::InvalidFormat);
             }
             self.parse_connect_flag(buf[9]);
             self.keepalive_timer = byte_pair_to_u16(buf[10], buf[11]);
             consumed_length = 12;
         } else {
-            return Err(anyhow::anyhow!(
-                "Connect Protocol Header Error, length 6 not 4"
-            ));
+            return Err(MqttError::InvalidFormat);
         }
 
         /* CONNECT Properties */
@@ -831,7 +840,11 @@ impl MqttPacket for Connect {
         // NEXT -> Connect Payload
     }
 
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_payload(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
         /* client id */
         // payload
         println!("{:#04X?}", &buf[0..2]);
@@ -862,9 +875,7 @@ impl MqttPacket for Connect {
                 if pos - first_will_property_position == will_property_length {
                     break;
                 } else if pos - first_will_property_position > will_property_length {
-                    return Err(anyhow::anyhow!(
-                        "Protocol: Protocol Length overrun (will properties)"
-                    ));
+                    return Err(MqttError::InvalidFormat);
                 }
                 println!("will property 0x{:x}", buf[pos]);
                 match buf[pos] {
@@ -879,9 +890,7 @@ impl MqttPacket for Connect {
                     0x01 => {
                         match self.will_properties.payload_format_indicator {
                             Some(_) => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol: Duplicate Payload format indicator"
-                                ))
+                                return Err(MqttError::InvalidFormat);
                             }
                             _ => {}
                         };
@@ -896,7 +905,7 @@ impl MqttPacket for Connect {
                     0x03 => {
                         match self.will_properties.content_type {
                             Some(_) => {
-                                return Err(anyhow::anyhow!("Protocol: Duplicate content type"));
+                                return Err(MqttError::InvalidFormat);
                             }
                             _ => {}
                         };
@@ -915,9 +924,7 @@ impl MqttPacket for Connect {
                         //?? Binary Data is represented by a Two Byte Integer length which indicates the number of data bytes, followed by that number of bytes. Thus, the length of Binary Data is limited to the range of 0 to 65,535 Bytes.
                         match self.will_properties.correlation_data {
                             Some(_) => {
-                                return Err(anyhow::anyhow!(
-                                    "Protocol: Duplicate will properties correlation data"
-                                ));
+                                return Err(MqttError::InvalidFormat);
                             }
                             _ => {}
                         };
@@ -945,10 +952,7 @@ impl MqttPacket for Connect {
                     }
 
                     code => {
-                        return Err(anyhow::anyhow!(
-                            "Protocol: Unknown Will Property Error 0x{:x}",
-                            code
-                        ));
+                        return Err(MqttError::InvalidFormat);
                     }
                 }
             }
@@ -1156,12 +1160,11 @@ pub enum ProtocolVersion {
 }
 
 pub mod parser {
-    use super::{decode_variable_length, Connect, ControlPacket, Disconnect, MqttPacket};
-    use anyhow;
+    use super::{
+        decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket,
+    };
     // (, consumed size)
-    pub fn parse_fixed_header(
-        buf: &bytes::BytesMut,
-    ) -> Result<(ControlPacket, usize), anyhow::Error> {
+    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<(ControlPacket, usize), MqttError> {
         println!("{:#b}", buf[0]);
         match buf[0] >> 4 {
             0b0001 => {
@@ -1182,12 +1185,7 @@ pub mod parser {
                     consumed_bytes,
                 ));
             }
-            control_type => {
-                return Err(anyhow::anyhow!(
-                    "Control packet decode error {}",
-                    control_type
-                ))
-            }
+            _control_type => return Err(MqttError::InvalidFormat),
         };
     }
 }
