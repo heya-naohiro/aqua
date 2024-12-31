@@ -29,23 +29,39 @@ pub enum ControlPacket {
 }
 
 pub trait MqttPacket {
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError>;
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError>;
+    fn parse_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError>;
+    fn parse_payload(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError>;
     fn remain_length(&self) -> usize;
 }
 
 impl MqttPacket for ControlPacket {
-    fn parse_payload(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
+    fn parse_payload(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.parse_payload(buf),
-            ControlPacket::PUBLISH(p) => p.parse_payload(buf),
+            ControlPacket::CONNECT(p) => p.parse_payload(buf, start_pos),
+            ControlPacket::PUBLISH(p) => p.parse_payload(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
+    fn parse_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.parse_variable_header(buf),
-            ControlPacket::PUBLISH(p) => p.parse_variable_header(buf),
+            ControlPacket::CONNECT(p) => p.parse_variable_header(buf, start_pos),
+            ControlPacket::PUBLISH(p) => p.parse_variable_header(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -253,7 +269,30 @@ pub struct Publish {
     pub retain: Retain,
     pub topic_name: Option<TopicName>,
     pub pub_properties: PublishProperties,
-    pub packet_id: PacketId, /* 2byte integer */
+    pub packet_id: Option<PacketId>, /* 2byte integer */
+}
+
+#[derive(Debug, PartialEq)]
+struct TopicName(String);
+
+impl TopicName {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (topic_name, next_pos) = decode_utf8_string(buf, start_pos)?;
+        Ok((TopicName(topic_name), next_pos))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct PacketId(u16);
+impl PacketId {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+    }
 }
 
 // Properties key
@@ -609,12 +648,16 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
 
 impl MqttPacket for Publish {
     // next_positionを返す
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, MqttError> {
-        let mut consumed_length = 0;
+    // すべて揃っている前提としない、なぜならば、Publishには大量のデータが転送される可能性があるので、
+    // メモリを節約したいから！
+    fn parse_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
         // topic name UTF-8 Encoded String
-        let (topic_name, mut next_pos) = decode_utf8_string(buf, 0)?;
-        self.topic_name = Some(topic_name);
-        consumed_length = next_pos;
+        let (result, mut next_pos) = TopicName::try_from(buf, start_pos)?;
+        self.topic_name = Some(result);
 
         // packet identifier
         if self.qos == QoS::QoS1 || self.qos == QoS::QoS2 {
@@ -622,9 +665,9 @@ impl MqttPacket for Publish {
             if buf.len() < next_pos + 1 {
                 return Err(MqttError::InsufficientBytes.into());
             }
-            self.packet_id = ((buf[next_pos] as u16) << 8) + buf[next_pos + 1] as u16;
-            consumed_length = consumed_length + 2;
-            next_pos = next_pos + 2;
+            let result;
+            (result, next_pos) = PacketId::try_from(buf, next_pos)?;
+            self.packet_id = Some(result);
         }
         // Properties
         let property_length;
@@ -679,28 +722,19 @@ impl MqttPacket for Publish {
                 PROPERTY_USER_PROPERTY_ID => {
                     let user_property;
                     (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
-                    match self.pub_properties.user_properties {
-                        None => {
-                            self.pub_properties.user_properties = Some(vec![user_property]);
-                        }
-                        Some(mut up) => up.push(user_property),
-                    }
+                    // 所有権を奪わずに変更する。
+                    self.pub_properties
+                        .user_properties
+                        .get_or_insert_with(Vec::new)
+                        .push(user_property);
                 }
                 PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
-                    match self.pub_properties.subscription_identifier {
-                        Some(mut si) => {
-                            let result;
-                            (result, next_pos) =
-                                SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                            si.push(result);
-                        }
-                        None => {
-                            let result;
-                            (result, next_pos) =
-                                SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                            self.pub_properties.subscription_identifier = Some(vec![result]);
-                        }
-                    }
+                    let result;
+                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                    self.pub_properties
+                        .subscription_identifier
+                        .get_or_insert_with(Vec::new)
+                        .push(result);
                 }
                 PROPERTY_CONTENT_TYPE_ID => {
                     // It is a Protocol Error to include the Content Type more than once.
@@ -730,7 +764,11 @@ impl MqttPacket for Publish {
 
 impl MqttPacket for Connect {
     // return consumed length
-    fn parse_variable_header(&mut self, buf: &bytes::BytesMut) -> Result<usize, anyhow::Error> {
+    fn parse_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, anyhow::Error> {
         let mut consumed_length = 0;
         let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
         println!("variable header: Variable length: {}", protocol_length);
