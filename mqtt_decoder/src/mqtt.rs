@@ -701,7 +701,7 @@ impl MqttPacket for Publish {
                 }
                 PROPERTY_TOPIC_ALIAS_ID => {
                     // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.topic_alias == None {
+                    if self.pub_properties.topic_alias != None {
                         return Err(MqttError::InvalidFormat);
                     }
                     let result;
@@ -710,7 +710,7 @@ impl MqttPacket for Publish {
                 }
                 PROPERTY_RESPONSE_TOPIC_ID => {
                     // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.response_topic == None {
+                    if self.pub_properties.response_topic != None {
                         return Err(MqttError::InvalidFormat);
                     }
                     let result;
@@ -719,7 +719,7 @@ impl MqttPacket for Publish {
                 }
                 PROPERTY_CORRELATION_DATA_ID => {
                     // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.correlation_data == None {
+                    if self.pub_properties.correlation_data != None {
                         return Err(MqttError::InvalidFormat);
                     }
                     let result;
@@ -745,7 +745,7 @@ impl MqttPacket for Publish {
                 }
                 PROPERTY_CONTENT_TYPE_ID => {
                     // It is a Protocol Error to include the Content Type more than once.
-                    if self.pub_properties.content_type == None {
+                    if self.pub_properties.content_type != None {
                         return Err(MqttError::InvalidFormat);
                     }
                     let result;
@@ -765,7 +765,6 @@ impl MqttPacket for Publish {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
-        todo!();
     }
 
     fn remain_length(&self) -> usize {
@@ -858,7 +857,7 @@ impl MqttPacket for Connect {
             ) as usize;
             self.client_id = match std::str::from_utf8(&buf[2..2 + client_id_length]) {
                 Ok(v) => v.to_string(),
-                Err(_) => return Err(anyhow::anyhow!("Protocol: Client ID parse Error, not utf8")),
+                Err(_) => return Err(MqttError::InvalidFormat),
             };
             pos = 2 + client_id_length;
         }
@@ -1030,7 +1029,7 @@ impl Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
         property_length: usize,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), MqttError> {
         let mut pos = start_pos;
         loop {
             //3 4 5 6 7 | 8
@@ -1043,7 +1042,7 @@ impl Connect {
             }
             // overrun
             if pos > start_pos + property_length {
-                return Err(anyhow::anyhow!("Property Length Error"));
+                return Err(MqttError::InvalidFormat);
             }
             println!("Connect Property 0x{:x}", buf[pos]);
             match buf[pos] {
@@ -1051,7 +1050,7 @@ impl Connect {
                     self.properties.session_expiry_interval = u32::from_be_bytes(
                         buf[pos + 1..pos + 5]
                             .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
+                            .map_err(|_| MqttError::InvalidFormat)?,
                     );
                     pos = pos + 5;
                     println!("0x11, {}", self.properties.session_expiry_interval)
@@ -1100,9 +1099,7 @@ impl Connect {
                 0x15 => {
                     match self.properties.authentication_method {
                         Some(_) => {
-                            return Err(anyhow::anyhow!(
-                                "Protocol Error: Duplicateauthentication method"
-                            ));
+                            return Err(MqttError::InvalidFormat);
                         }
                         None => {}
                     };
@@ -1114,9 +1111,7 @@ impl Connect {
                 0x16 => {
                     match self.properties.authentication_data {
                         Some(_) => {
-                            return Err(anyhow::anyhow!(
-                                "Protocol Error: Duplicateauthentication data"
-                            ));
+                            return Err(MqttError::InvalidFormat);
                         }
                         None => {}
                     };
@@ -1131,7 +1126,7 @@ impl Connect {
                     pos = pos + 3 + length;
                 }
 
-                code => return Err(anyhow::anyhow!("Unknown Connect Property 0x{:x}", code)),
+                code => return Err(MqttError::InvalidFormat),
             }
         }
         return Ok(());
@@ -1237,7 +1232,7 @@ mod tests {
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
             // variable header
-            let ret = connect.parse_variable_header(&b);
+            let ret = connect.parse_variable_header(&b, 0);
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver {
                 ProtocolVersion::V5 => {}
@@ -1254,7 +1249,7 @@ mod tests {
             println!("variable {}", consumed);
             b.advance(consumed);
 
-            let res = connect.parse_payload(&b);
+            let res = connect.parse_payload(&b, consumed);
             assert!(res.is_ok());
             assert_eq!(connect.client_id, "publish-549".to_string());
         } else {
@@ -1285,7 +1280,7 @@ mod tests {
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
-            let ret = connect.parse_variable_header(&b);
+            let ret = connect.parse_variable_header(&b, 0);
             println!("Hello");
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver {
@@ -1296,7 +1291,7 @@ mod tests {
             println!("variable {}", consumed);
             b.advance(consumed);
 
-            let res = connect.parse_payload(&b);
+            let res = connect.parse_payload(&b, consumed);
             assert!(res.is_ok());
             assert_eq!(connect.client_id, "publish-710".to_string());
             println!(">>>> {:?}", connect);
