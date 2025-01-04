@@ -484,7 +484,7 @@ impl TryFrom<u8> for QoS {
 
 #[derive(PartialEq, Debug)]
 pub struct Connect {
-    pub remain_length: usize,
+    pub protocol_name: ProtocolName,
     pub protocol_ver: ProtocolVersion,
     pub clean_session: bool,
     pub will: bool,
@@ -501,6 +501,84 @@ pub struct Connect {
     pub properties: ConnectProperties,
     pub will_properties: WillProperties,
 }
+
+struct ProtocolName(String);
+
+impl ProtocolName {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let length = (((buf[start_pos] as usize) << 8) + (buf[start_pos + 1] as usize)) as usize;
+        let ret = String::from_utf8(buf[start_pos + 1..start_pos + 1 + length].to_vec())
+            .or_else(|_| Err(MqttError::InvalidFormat))?;
+        Ok((ProtocolName(ret), start_pos + 1 + length))
+    }
+}
+
+struct ProtocolVersion(u8);
+impl ProtocolVersion {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        Ok((ProtocolVersion(buf[start_pos]), start_pos + 1))
+    }
+}
+
+struct ConnectFlags {
+    user_name_flag: bool,
+    password_flag: bool,
+    will_retain: bool,
+    will_qos: QoS,
+    will_flag: bool,
+    clean_start: bool,
+}
+impl ConnectFlags {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        // The Server MUST validate that the reserved flag in the CONNECT
+        // packet is set to 0 [MQTT-3.1.2-3].
+        // If the reserved flag is not 0 it is a Malformed Packet.
+        // Refer to section 4.13 for information about handling errors.
+        if buf[start_pos] & 0b00000001 != 0 {
+            return Err(MqttError::InvalidFormat);
+        }
+        let will_qos = match (buf[start_pos] & 0b00011000) >> 3 {
+            0x00 => QoS::QoS0,
+            0x01 => QoS::QoS1,
+            0x02 => QoS::QoS2,
+            _ => return Err(MqttError::InvalidFormat),
+        };
+        Ok((
+            ConnectFlags {
+                user_name_flag: buf[start_pos] & 0b10000000 != 0,
+                password_flag: buf[start_pos] & 0b01000000 != 0,
+                will_retain: buf[start_pos] & 0b00100000 != 0,
+                will_qos,
+                will_flag: buf[start_pos] & 0b00000100 != 0,
+                clean_start: buf[start_pos] & 0b00000010 != 0,
+            },
+            start_pos + 1,
+        ))
+    }
+}
+
+struct KeepAlive(u16);
+impl KeepAlive {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        Ok((
+            KeepAlive(((buf[start_pos] as u16) << 8) + (buf[start_pos + 1] as u16)),
+            start_pos + 2,
+        ))
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct ConnectProperties {
     pub session_expiry_interval: u32,
@@ -773,7 +851,7 @@ impl MqttPacket for Publish {
 }
 
 impl MqttPacket for Connect {
-    // return consumed length
+    // Connectはすべて揃っている前提でデコードする
     fn parse_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
