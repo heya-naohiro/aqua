@@ -765,6 +765,39 @@ impl WillPayload {
     }
 }
 
+// User Name
+#[derive(Debug, PartialEq)]
+struct UserName(String);
+impl UserName {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (i, s) = decode_utf8_string(buf, start_pos)?;
+        return Ok((Self(i), s));
+    }
+}
+
+// Will Payload
+#[derive(Debug, PartialEq)]
+struct Password(bytes::Bytes);
+impl Password {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        // u16 length
+        let length = ((buf[start_pos] as usize) << 8) + buf[start_pos + 1] as usize;
+        // length分だけコピー
+        return Ok((
+            Self(bytes::Bytes::copy_from_slice(
+                &buf[start_pos + 2..start_pos + 2 + length],
+            )),
+            start_pos + 2 + length,
+        ));
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct ConnectProperties {
     pub session_expiry_interval: u32,
