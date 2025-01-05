@@ -302,7 +302,7 @@ impl PacketId {
     }
 }
 
-// Properties key
+// Property keys
 const PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID: u8 = 0x01;
 const PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID: u8 = 0x02;
 const PROPERTY_TOPIC_ALIAS_ID: u8 = 0x23;
@@ -311,6 +311,19 @@ const PROPERTY_CORRELATION_DATA_ID: u8 = 0x09;
 const PROPERTY_USER_PROPERTY_ID: u8 = 0x26;
 const PROPERTY_SUBSCRIPTION_IDENTIFIER_ID: u8 = 0x0b;
 const PROPERTY_CONTENT_TYPE_ID: u8 = 0x03;
+
+// Property keys
+const PROPERTY_SESSION_EXPIRY_INTERVAL: u8 = 0x11;
+const PROPERTY_RECIEVE_MAXIMUM: u8 = 0x21;
+const PROPERTY_MAXIMUM_PACKET_SIZE: u8 = 0x27;
+const PROPERTY_TOPIC_ALIAS_MAXIMUM: u8 = 0x22;
+const PROPERTY_REQUEST_RESPONSE_INFORMATION: u8 = 0x19;
+const PROPERTY_REQUEST_PROBLEM_INFORMATION: u8 = 0x17;
+const PROPERTY_AUTHENTICATION_METHOD: u8 = 0x15;
+const PROPERTY_AUTHENTICATION_DATA: u8 = 0x16;
+
+// Property keys
+const PROPERTY_WILL_DELAY_INTERVAL: u8 = 0x18;
 
 // [TODO] ConnectProperties / WillPropertyもこうする
 #[derive(PartialEq, Debug)]
@@ -576,6 +589,179 @@ impl KeepAlive {
             KeepAlive(((buf[start_pos] as u16) << 8) + (buf[start_pos + 1] as u16)),
             start_pos + 2,
         ))
+    }
+}
+
+// Connect Properties
+
+#[derive(Debug, PartialEq)]
+struct SessionExpiryInterval(u32);
+impl SessionExpiryInterval {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = u32::from_be_bytes(
+            buf[start_pos..start_pos + 4]
+                .try_into()
+                .map_err(|_| MqttError::InvalidFormat)?,
+        );
+        return Ok((SessionExpiryInterval(i), start_pos + 4));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct ReceiveMaximum(u16);
+impl ReceiveMaximum {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = ((buf[start_pos] as u16) << 8) + buf[start_pos + 1] as u16;
+        if i == 0 {
+            // It is a Protocol Error to include the Receive Maximum value more than once or for it to have the value 0.
+            return Err(MqttError::InvalidFormat);
+        }
+        return Ok((ReceiveMaximum(i), start_pos + 2));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct MaximumPacketSize(u32);
+impl MaximumPacketSize {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = u32::from_be_bytes(
+            buf[start_pos..start_pos + 4]
+                .try_into()
+                .map_err(|_| MqttError::InvalidFormat)?,
+        );
+        if i == 0 {
+            return Err(MqttError::InvalidFormat);
+        }
+        return Ok((Self(i), start_pos + 4));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct TopicAliasMaximum(u16);
+impl TopicAliasMaximum {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = ((buf[start_pos] as u16) << 8) + buf[start_pos + 1] as u16;
+        if i == 0 {
+            // It is a Protocol Error to include the Receive Maximum value more than once or for it to have the value 0.
+            return Err(MqttError::InvalidFormat);
+        }
+        return Ok((Self(i), start_pos + 2));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RequestResponseInformation(bool);
+impl RequestResponseInformation {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = match buf[start_pos] {
+            0x00 => false,
+            0x01 => true,
+            _ => {
+                return Err(MqttError::InvalidFormat);
+            }
+        };
+        return Ok((Self(i), start_pos + 1));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RequestProblemInformation(bool);
+impl RequestProblemInformation {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = match buf[start_pos] {
+            0x00 => false,
+            0x01 => true,
+            _ => {
+                return Err(MqttError::InvalidFormat);
+            }
+        };
+        return Ok((Self(i), start_pos + 1));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct AuthenticationMethod(String);
+impl AuthenticationMethod {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (i, s) = decode_utf8_string(buf, start_pos)?;
+        return Ok((Self(i), s));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct AuthenticationData(bytes::Bytes);
+impl AuthenticationData {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        // u16 length
+        let length = ((buf[start_pos] as usize) << 8) + buf[start_pos + 1] as usize;
+        // length分だけコピー
+        return Ok((
+            Self(bytes::Bytes::copy_from_slice(
+                &buf[start_pos + 2..start_pos + 2 + length],
+            )),
+            start_pos + 2 + length,
+        ));
+    }
+}
+
+// Will Properties
+#[derive(Debug, PartialEq)]
+struct WillDelayInterval(u32);
+impl WillDelayInterval {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let i = u32::from_be_bytes(
+            buf[start_pos..start_pos + 4]
+                .try_into()
+                .map_err(|_| MqttError::InvalidFormat)?,
+        );
+        return Ok((Self(i), start_pos + 4));
+    }
+}
+
+// Will Payload
+#[derive(Debug, PartialEq)]
+struct WillPayload(bytes::Bytes);
+impl WillPayload {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        // u16 length
+        let length = ((buf[start_pos] as usize) << 8) + buf[start_pos + 1] as usize;
+        // length分だけコピー
+        return Ok((
+            Self(bytes::Bytes::copy_from_slice(
+                &buf[start_pos + 2..start_pos + 2 + length],
+            )),
+            start_pos + 2 + length,
+        ));
     }
 }
 
