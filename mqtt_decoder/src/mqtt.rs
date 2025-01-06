@@ -1156,9 +1156,10 @@ impl MqttPacket for Connect {
                     (result, next_pos) = AuthenticationData::try_from(buf, next_pos + 1)?;
 
                     self.properties.authentication_data = Some(result);
-                } // need to verify "interactive vatidation" for example,
-                  // in authentication data
-                  // """It is a Protocol Error to include Authentication Data if there is no Authentication Method."""
+                }
+                _ => {
+                    return Err(MqttError::InvalidFormat);
+                }
             }
 
             // need to check authentication data
@@ -1170,67 +1171,7 @@ impl MqttPacket for Connect {
                 return Err(MqttError::InvalidFormat);
             }
         }
-
-        /*
-        let mut consumed_length = 0;
-        let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
-        println!("variable header: Variable length: {}", protocol_length);
-        // MQTT version 5 & 3.1.1 ( MQTT )
-        if protocol_length == 4
-            && buf[2] == 0b01001101
-            && buf[3] == 0b01010001
-            && buf[4] == 0b01010100
-            && buf[5] == 0b01010100
-        {
-            if buf[6] == 0b00000101 {
-                self.protocol_ver = ProtocolVersion::V5;
-            } else if buf[6] == 0b00000100 {
-                self.protocol_ver = ProtocolVersion::V3_1_1;
-            } else {
-                // Error
-                return Err(MqttError::InvalidFormat);
-            }
-            self.parse_connect_flag(buf[7]);
-            self.keepalive_timer = byte_pair_to_u16(buf[8], buf[9]);
-            consumed_length = 10;
-        } else if protocol_length == 6 /* MQTT version 3.1 & 3 ( MQIsdp ) */
-
-            && buf[2] == 0b01001101
-            && buf[3] == 0b01010001
-            && buf[4] == 0b01001001
-            && buf[5] == 0b01110011
-            && buf[6] == 0b01100100
-            && buf[7] == 0b01110000
-        {
-            if buf[8] == 0b00000011 {
-                self.protocol_ver = ProtocolVersion::V3_1;
-            } else {
-                // Error
-                return Err(MqttError::InvalidFormat);
-            }
-            self.parse_connect_flag(buf[9]);
-            self.keepalive_timer = byte_pair_to_u16(buf[10], buf[11]);
-            consumed_length = 12;
-        } else {
-            return Err(MqttError::InvalidFormat);
-        }
-
-        /* CONNECT Properties */
-        match self.protocol_ver {
-            ProtocolVersion::V5 => {
-                let (property_length, end_pos) = decode_variable_length(buf, 10)?;
-                consumed_length = consumed_length + (end_pos - 10 + 1); /* length of length  10 11 12 13 -> 13 - 10 + 14 = 3 */
-                // property length;
-                /* variable  */
-                self.parse_properties(buf, end_pos + 1, property_length)?;
-                consumed_length = consumed_length + property_length;
-            }
-            _ => {}
-        }
-
-        Ok(consumed_length)
-        */
-        // NEXT -> Connect Payload
+        return Ok(next_pos);
     }
 
     fn parse_payload(
@@ -1238,148 +1179,6 @@ impl MqttPacket for Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
-        /* client id */
-        // payload
-        println!("{:#04X?}", &buf[0..2]);
-        let mut pos = 0;
-        {
-            //decode_utf8_string
-            let client_id_length = u16::from_be_bytes(
-                buf[0..2]
-                    .try_into()
-                    .map_err(|_| anyhow::Error::msg("Invalid slice length for u8"))?,
-            ) as usize;
-            self.client_id = match std::str::from_utf8(&buf[2..2 + client_id_length]) {
-                Ok(v) => v.to_string(),
-                Err(_) => return Err(MqttError::InvalidFormat),
-            };
-            pos = 2 + client_id_length;
-        }
-        /* will property*/
-        /* */
-        if self.will {
-            let (will_property_length, end_pos) = decode_variable_length(buf, pos)?;
-            println!("will property length {}", will_property_length);
-            pos = end_pos + 1;
-            let first_will_property_position = pos;
-            loop {
-                // 3 4 5 6 7 8
-                // 8 - 3 = 5
-                if pos - first_will_property_position == will_property_length {
-                    break;
-                } else if pos - first_will_property_position > will_property_length {
-                    return Err(MqttError::InvalidFormat);
-                }
-                println!("will property 0x{:x}", buf[pos]);
-                match buf[pos] {
-                    0x18 => {
-                        self.will_properties.will_delay_interval = decode_u32_bytes(buf, pos + 1)?;
-                        println!(
-                            "will deray interval {}",
-                            self.will_properties.will_delay_interval
-                        );
-                        pos = pos + 5;
-                    }
-                    0x01 => {
-                        match self.will_properties.payload_format_indicator {
-                            Some(_) => {
-                                return Err(MqttError::InvalidFormat);
-                            }
-                            _ => {}
-                        };
-                        self.will_properties.payload_format_indicator = Some(buf[pos + 1] == 0b1);
-                        pos = pos + 2;
-                    }
-                    0x02 => {
-                        self.will_properties.message_expiry_interval =
-                            Some(decode_u32_bytes(buf, pos + 1)?);
-                        pos = pos + 5
-                    }
-                    0x03 => {
-                        match self.will_properties.content_type {
-                            Some(_) => {
-                                return Err(MqttError::InvalidFormat);
-                            }
-                            _ => {}
-                        };
-                        let (content_type, end_pos) = decode_utf8_string(buf, pos + 1)?;
-                        self.will_properties.content_type = Some(content_type);
-                        pos = end_pos;
-                    }
-                    0x08 => {
-                        //let end_pos;
-                        let (response_topic, end_pos) = decode_utf8_string(buf, pos + 1)?;
-                        self.will_properties.response_topic = Some(response_topic);
-
-                        pos = end_pos;
-                    }
-                    0x09 => {
-                        //?? Binary Data is represented by a Two Byte Integer length which indicates the number of data bytes, followed by that number of bytes. Thus, the length of Binary Data is limited to the range of 0 to 65,535 Bytes.
-                        match self.will_properties.correlation_data {
-                            Some(_) => {
-                                return Err(MqttError::InvalidFormat);
-                            }
-                            _ => {}
-                        };
-                        let datalength = decode_u16_bytes(buf, pos + 1)? as usize;
-                        println!("0x09 correlation_data length {:?}", datalength);
-                        self.will_properties.correlation_data = Some(
-                            bytes::Bytes::copy_from_slice(&buf[pos + 3..pos + 3 + datalength]),
-                        );
-                        println!(
-                            "0x09 correlation_data {:?}",
-                            self.will_properties.correlation_data
-                        );
-                        pos = pos + 3 + datalength;
-                    }
-                    0x26 => {
-                        let (key, end_pos) = decode_utf8_string(buf, pos + 1)?;
-                        let (value, end_pos) = decode_utf8_string(buf, end_pos)?;
-                        self.will_properties.user_properties.push((key, value));
-                        pos = end_pos;
-                    }
-                    0x0B => {
-                        let (id, end_pos) = decode_variable_length(buf, pos + 1)?;
-                        self.will_properties.subscription_identifier = id;
-                        pos = end_pos + 1;
-                    }
-
-                    code => {
-                        return Err(MqttError::InvalidFormat);
-                    }
-                }
-            }
-        }
-        /* will properties end */
-        /* */
-        if self.will {
-            // will topic
-            let (wt, end_pos) = decode_utf8_string(buf, pos)?;
-            self.will_topic = wt;
-            pos = end_pos;
-            // will payload
-            let datalength = decode_u16_bytes(buf, pos)? as usize;
-            self.will_payload = Some(bytes::Bytes::copy_from_slice(
-                &buf[pos + 2..pos + 2 + datalength],
-            ));
-
-            pos = pos + 2 + datalength;
-        }
-        if self.user_name_flag {
-            let (str, end_pos) = decode_utf8_string(buf, pos)?;
-            self.username = Some(str);
-            pos = end_pos;
-        }
-
-        if self.user_password_flag {
-            let datalength = decode_u16_bytes(buf, pos)? as usize;
-            self.password = Some(bytes::Bytes::copy_from_slice(
-                &buf[pos + 2..pos + 2 + datalength],
-            ));
-            pos = pos + 2 + datalength;
-        }
-
-        Ok(pos)
     }
 
     fn remain_length(&self) -> usize {
