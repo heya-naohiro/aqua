@@ -1,3 +1,4 @@
+use axum::response::Response;
 use bytes::BufMut;
 use thiserror::Error;
 
@@ -499,22 +500,15 @@ impl TryFrom<u8> for QoS {
 pub struct Connect {
     pub protocol_name: ProtocolName,
     pub protocol_ver: ProtocolVersion,
-    pub clean_session: bool,
-    pub will: bool,
-    pub will_qos: u8,
-    pub will_retain: bool,
-    pub will_topic: String,
-    pub will_payload: Option<bytes::Bytes>,
-    pub user_password_flag: bool,
-    pub user_name_flag: bool,
+    pub connect_flags: ConnectFlags,
+    pub keepalive: KeepAlive,
+    pub properties: ConnectProperties,
     pub client_id: String,
     pub username: Option<String>,
     pub password: Option<bytes::Bytes>,
-    pub keepalive_timer: u16,
-    pub properties: ConnectProperties,
     pub will_properties: WillProperties,
 }
-
+#[derive(PartialEq, Debug)]
 struct ProtocolName(String);
 
 impl ProtocolName {
@@ -529,6 +523,7 @@ impl ProtocolName {
     }
 }
 
+#[derive(PartialEq, Debug)]
 struct ProtocolVersion(u8);
 impl ProtocolVersion {
     fn try_from(
@@ -539,6 +534,7 @@ impl ProtocolVersion {
     }
 }
 
+#[derive(PartialEq, Debug)]
 struct ConnectFlags {
     user_name_flag: bool,
     password_flag: bool,
@@ -579,6 +575,7 @@ impl ConnectFlags {
     }
 }
 
+#[derive(PartialEq, Debug)]
 struct KeepAlive(u16);
 impl KeepAlive {
     fn try_from(
@@ -800,26 +797,26 @@ impl Password {
 
 #[derive(PartialEq, Debug)]
 pub struct ConnectProperties {
-    pub session_expiry_interval: u32,
-    pub receive_maximum: u16,
-    pub maximum_packet_size: u32,
-    pub topic_alias_maximum: u16,
-    pub request_response_information: bool,
-    pub request_problem_infromation: bool,
-    pub user_properties: Vec<(String, String)>,
-    pub authentication_method: Option<String>,
-    pub authentication_data: Option<bytes::Bytes>,
+    pub session_expiry_interval: Option<SessionExpiryInterval>,
+    pub receive_maximum: Option<ReceiveMaximum>,
+    pub maximum_packet_size: Option<MaximumPacketSize>,
+    pub topic_alias_maximum: Option<TopicAliasMaximum>,
+    pub request_response_information: Option<RequestResponseInformation>,
+    pub request_problem_information: Option<RequestProblemInformation>,
+    pub user_properties: Option<Vec<UserProperty>>,
+    pub authentication_method: Option<AuthenticationMethod>,
+    pub authentication_data: Option<AuthenticationData>,
 }
 #[derive(PartialEq, Debug)]
 pub struct WillProperties {
-    pub will_delay_interval: u32,
-    pub payload_format_indicator: Option<bool>,
-    pub message_expiry_interval: Option<u32>,
-    pub content_type: Option<String>,
-    pub response_topic: Option<String>,
-    pub correlation_data: Option<bytes::Bytes>,
-    pub user_properties: Vec<(String, String)>,
-    pub subscription_identifier: usize,
+    pub will_delay_interval: Option<WillDelayInterval>,
+    pub payload_format_indicator: Option<PayloadFormatIndicator>,
+    pub message_expiry_interval: Option<MessageExpiryInterval>,
+    pub content_type: Option<ContentType>,
+    pub response_topic: Option<ResponseTopic>,
+    pub correlation_data: Option<CorrelationData>,
+    pub user_properties: Option<Vec<UserProperty>>,
+    pub subscription_identifier: Option<SubscriptionIdentifier>,
 }
 
 impl Default for WillProperties {
@@ -1076,6 +1073,105 @@ impl MqttPacket for Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
+        let (result, mut next_pos) = ProtocolName::try_from(buf, start_pos)?;
+        self.protocol_name = result;
+
+        (self.protocol_ver, next_pos) = ProtocolVersion::try_from(buf, next_pos)?;
+        (self.connect_flags, next_pos) = ConnectFlags::try_from(buf, next_pos)?;
+        (self.keepalive, next_pos) = KeepAlive::try_from(buf, next_pos)?;
+
+        let property_length;
+        (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+        let end_pos = next_pos + property_length;
+        loop {
+            if next_pos == end_pos {
+                break;
+            }
+            if next_pos > end_pos {
+                return Err(MqttError::InvalidFormat);
+            }
+            match buf[next_pos] {
+                PROPERTY_SESSION_EXPIRY_INTERVAL => {
+                    if let Some(_) = self.properties.session_expiry_interval {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = SessionExpiryInterval::try_from(buf, next_pos + 1)?;
+                    self.properties.session_expiry_interval = Some(result);
+                }
+                PROPERTY_RECIEVE_MAXIMUM => {
+                    if let Some(_) = self.properties.receive_maximum {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = ReceiveMaximum::try_from(buf, next_pos + 1)?;
+                    self.properties.receive_maximum = Some(result);
+                }
+                PROPERTY_MAXIMUM_PACKET_SIZE => {
+                    if let Some(_) = self.properties.maximum_packet_size {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = MaximumPacketSize::try_from(buf, next_pos + 1)?;
+                    self.properties.maximum_packet_size = Some(result);
+                }
+                PROPERTY_REQUEST_RESPONSE_INFORMATION => {
+                    if let Some(_) = self.properties.request_response_information {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = RequestResponseInformation::try_from(buf, next_pos + 1)?;
+                    self.properties.request_response_information = Some(result);
+                }
+                PROPERTY_REQUEST_PROBLEM_INFORMATION => {
+                    if let Some(_) = self.properties.request_problem_information {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = RequestProblemInformation::try_from(buf, next_pos + 1)?;
+                    self.properties.request_problem_information = Some(result);
+                }
+                PROPERTY_USER_PROPERTY_ID => {
+                    let user_property;
+                    (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                    // 所有権を奪わずに変更する。
+                    self.properties
+                        .user_properties
+                        .get_or_insert_with(Vec::new)
+                        .push(user_property);
+                }
+                PROPERTY_AUTHENTICATION_METHOD => {
+                    if let Some(_) = self.properties.authentication_method {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = AuthenticationMethod::try_from(buf, next_pos + 1)?;
+                    self.properties.authentication_method = Some(result);
+                }
+                PROPERTY_AUTHENTICATION_DATA => {
+                    if let Some(_) = self.properties.authentication_data {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = AuthenticationData::try_from(buf, next_pos + 1)?;
+
+                    self.properties.authentication_data = Some(result);
+                } // need to verify "interactive vatidation" for example,
+                  // in authentication data
+                  // """It is a Protocol Error to include Authentication Data if there is no Authentication Method."""
+            }
+
+            // need to check authentication data
+            // validation
+            //"""It is a Protocol Error to include Authentication Data if there is no Authentication Method."""
+            if (self.properties.authentication_data != None)
+                && (self.properties.authentication_method == None)
+            {
+                return Err(MqttError::InvalidFormat);
+            }
+        }
+
+        /*
         let mut consumed_length = 0;
         let protocol_length = (((buf[0] as usize) << 8) + (buf[1] as usize)) as usize;
         println!("variable header: Variable length: {}", protocol_length);
@@ -1133,6 +1229,7 @@ impl MqttPacket for Connect {
         }
 
         Ok(consumed_length)
+        */
         // NEXT -> Connect Payload
     }
 
