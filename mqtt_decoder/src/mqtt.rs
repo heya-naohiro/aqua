@@ -468,8 +468,9 @@ impl ContentType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 enum QoS {
+    #[default]
     QoS0,
     QoS1,
     QoS2,
@@ -487,8 +488,9 @@ impl TryFrom<u8> for QoS {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub struct Connect {
+    pub remain_length: usize,
     pub protocol_name: ProtocolName,
     pub protocol_ver: ProtocolVersion,
     pub connect_flags: ConnectFlags,
@@ -501,7 +503,8 @@ pub struct Connect {
     pub will_topic: Option<TopicName>,
     pub will_payload: Option<WillPayload>,
 }
-#[derive(PartialEq, Debug)]
+
+#[derive(PartialEq, Debug, Default)]
 struct ProtocolName(String);
 
 impl ProtocolName {
@@ -516,7 +519,7 @@ impl ProtocolName {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 struct ProtocolVersion(u8);
 impl ProtocolVersion {
     fn try_from(
@@ -527,7 +530,7 @@ impl ProtocolVersion {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 struct ConnectFlags {
     user_name_flag: bool,
     password_flag: bool,
@@ -568,7 +571,7 @@ impl ConnectFlags {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 struct KeepAlive(u16);
 impl KeepAlive {
     fn try_from(
@@ -584,7 +587,7 @@ impl KeepAlive {
 
 // Connect Properties
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct SessionExpiryInterval(u32);
 impl SessionExpiryInterval {
     fn try_from(
@@ -600,7 +603,7 @@ impl SessionExpiryInterval {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct ReceiveMaximum(u16);
 impl ReceiveMaximum {
     fn try_from(
@@ -616,7 +619,7 @@ impl ReceiveMaximum {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct MaximumPacketSize(u32);
 impl MaximumPacketSize {
     fn try_from(
@@ -635,7 +638,7 @@ impl MaximumPacketSize {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct TopicAliasMaximum(u16);
 impl TopicAliasMaximum {
     fn try_from(
@@ -651,7 +654,7 @@ impl TopicAliasMaximum {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct RequestResponseInformation(bool);
 impl RequestResponseInformation {
     fn try_from(
@@ -669,7 +672,7 @@ impl RequestResponseInformation {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct RequestProblemInformation(bool);
 impl RequestProblemInformation {
     fn try_from(
@@ -687,7 +690,7 @@ impl RequestProblemInformation {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct AuthenticationMethod(String);
 impl AuthenticationMethod {
     fn try_from(
@@ -699,7 +702,7 @@ impl AuthenticationMethod {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct AuthenticationData(bytes::Bytes);
 impl AuthenticationData {
     fn try_from(
@@ -719,7 +722,7 @@ impl AuthenticationData {
 }
 
 // Will Properties
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct WillDelayInterval(u32);
 impl WillDelayInterval {
     fn try_from(
@@ -736,7 +739,7 @@ impl WillDelayInterval {
 }
 
 // Will Payload
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct WillPayload(bytes::Bytes);
 impl WillPayload {
     fn try_from(
@@ -756,7 +759,7 @@ impl WillPayload {
 }
 
 // User Name
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct UserName(String);
 impl UserName {
     fn try_from(
@@ -788,7 +791,7 @@ impl Password {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub struct ConnectProperties {
     pub session_expiry_interval: Option<SessionExpiryInterval>,
     pub receive_maximum: Option<ReceiveMaximum>,
@@ -800,7 +803,7 @@ pub struct ConnectProperties {
     pub authentication_method: Option<AuthenticationMethod>,
     pub authentication_data: Option<AuthenticationData>,
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub struct WillProperties {
     pub will_delay_interval: Option<WillDelayInterval>,
     pub payload_format_indicator: Option<PayloadFormatIndicator>,
@@ -909,7 +912,7 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
     remaining_length
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 struct ClientId(String);
 impl ClientId {
     fn try_from(
@@ -1250,9 +1253,6 @@ impl MqttPacket for Connect {
         return Ok(next_pos);
     }
 }
-impl Connect {
-    // return next position
-}
 
 pub struct Disconnect {
     remain_length: usize,
@@ -1272,15 +1272,18 @@ pub mod decoder {
     };
     // (, consumed size)
     pub fn decode_fixed_header(buf: &bytes::BytesMut) -> Result<(ControlPacket, usize), MqttError> {
-        println!("{:#b}", buf[0]);
+        // 最初が0である前提
         match buf[0] >> 4 {
             0b0001 => {
-                let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
+                let (remaining_length, next_pos) = decode_variable_length(buf, 1)?;
                 println!("remain :{}", remaining_length);
-                let consumed_bytes = 1 /* header */ + (endpos - 1) + 1 /* end - start + 1 */;
+                let consumed_bytes = 1 /* header */ + next_pos /* end - start + 1 */;
 
                 return Result::Ok((
-                    ControlPacket::CONNECT(Connect::new(remaining_length)),
+                    ControlPacket::CONNECT(Connect {
+                        remain_length: remaining_length,
+                        ..Default::default()
+                    }),
                     consumed_bytes,
                 ));
             }
