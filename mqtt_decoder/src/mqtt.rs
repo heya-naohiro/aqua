@@ -1,5 +1,6 @@
 use axum::response::Response;
 use bytes::BufMut;
+use hyper_util::client::legacy::Client;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -503,10 +504,12 @@ pub struct Connect {
     pub connect_flags: ConnectFlags,
     pub keepalive: KeepAlive,
     pub properties: ConnectProperties,
-    pub client_id: String,
-    pub username: Option<String>,
-    pub password: Option<bytes::Bytes>,
+    pub client_id: ClientId,
+    pub username: Option<UserName>,
+    pub password: Option<Password>,
     pub will_properties: WillProperties,
+    pub will_topic: Option<TopicName>,
+    pub will_payload: Option<WillPayload>,
 }
 #[derive(PartialEq, Debug)]
 struct ProtocolName(String);
@@ -947,6 +950,21 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
     remaining_length
 }
 
+#[derive(PartialEq, Debug)]
+struct ClientId(String);
+impl ClientId {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (res, pos) = decode_utf8_string(buf, start_pos)?;
+        if !res.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(MqttError::InvalidFormat);
+        }
+        Ok((Self(res), pos))
+    }
+}
+
 impl MqttPacket for Publish {
     // next_positionを返す
     // すべて揃っている前提としない、なぜならば、Publishには大量のデータが転送される可能性があるので、
@@ -1179,6 +1197,98 @@ impl MqttPacket for Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
+        // Client Identifier(MUST)
+        let mut next_pos;
+        (self.client_id, next_pos) = ClientId::try_from(buf, start_pos)?;
+        if self.connect_flags.will_flag {
+            // Will Properties
+            // properties length
+
+            let will_property_length;
+            (will_property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            let end_pos = next_pos + will_property_length;
+            loop {
+                if next_pos == end_pos {
+                    break;
+                }
+                if next_pos > end_pos {
+                    return Err(MqttError::InvalidFormat);
+                }
+                match buf[next_pos] {
+                    PROPERTY_WILL_DELAY_INTERVAL => {
+                        if let Some(_) = self.will_properties.will_delay_interval {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let ret;
+                        (ret, next_pos) = WillDelayInterval::try_from(buf, next_pos + 1)?;
+                        self.will_properties.will_delay_interval = Some(ret);
+                    }
+                    PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
+                        if let Some(_) = self.will_properties.payload_format_indicator {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let ret;
+                        (ret, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
+                        self.will_properties.payload_format_indicator = Some(ret);
+                    }
+                    PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
+                        if let Some(_) = self.will_properties.message_expiry_interval {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let ret;
+                        (ret, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
+                        self.will_properties.message_expiry_interval = Some(ret);
+                    }
+                    PROPERTY_CONTENT_TYPE_ID => {
+                        if let Some(_) = self.will_properties.content_type {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let ret;
+                        (ret, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
+                        self.will_properties.content_type = Some(ret);
+                    }
+                    PROPERTY_RESPONSE_TOPIC_ID => {
+                        if let Some(_) = self.will_properties.response_topic {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let ret;
+                        (ret, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
+                        self.will_properties.response_topic = Some(ret);
+                    }
+                    PROPERTY_USER_PROPERTY_ID => {
+                        let user_property;
+                        (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                        // 所有権を奪わずに変更する。
+                        self.will_properties
+                            .user_properties
+                            .get_or_insert_with(Vec::new)
+                            .push(user_property);
+                    }
+                }
+            }
+            // Will Topic
+            let ret;
+            (ret, next_pos) = TopicName::try_from(buf, next_pos)?;
+            self.will_topic = Some(ret);
+            // Will Payload
+            let ret;
+            (ret, next_pos) = WillPayload::try_from(buf, next_pos)?;
+            self.will_payload = Some(ret);
+        }
+
+        // User Name
+        if self.connect_flags.user_name_flag {
+            let ret;
+            (ret, next_pos) = UserName::try_from(buf, next_pos)?;
+            self.username = Some(ret);
+        }
+        // Password
+        if self.connect_flags.password_flag {
+            let ret;
+            (ret, next_pos) = Password::try_from(buf, next_pos)?;
+            self.password = Some(ret);
+        }
+        return Ok(next_pos);
     }
 
     fn remain_length(&self) -> usize {
