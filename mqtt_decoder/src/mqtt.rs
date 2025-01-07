@@ -1,6 +1,4 @@
-use axum::response::Response;
 use bytes::BufMut;
-use hyper_util::client::legacy::Client;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -31,47 +29,39 @@ pub enum ControlPacket {
 }
 
 pub trait MqttPacket {
-    fn parse_variable_header(
+    fn decode_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError>;
-    fn parse_payload(
+    fn decode_payload(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError>;
-    fn remain_length(&self) -> usize;
 }
 
 impl MqttPacket for ControlPacket {
-    fn parse_payload(
+    fn decode_payload(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.parse_payload(buf, start_pos),
-            ControlPacket::PUBLISH(p) => p.parse_payload(buf, start_pos),
+            ControlPacket::CONNECT(p) => p.decode_payload(buf, start_pos),
+            ControlPacket::PUBLISH(p) => p.decode_payload(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn parse_variable_header(
+    fn decode_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.parse_variable_header(buf, start_pos),
-            ControlPacket::PUBLISH(p) => p.parse_variable_header(buf, start_pos),
+            ControlPacket::CONNECT(p) => p.decode_variable_header(buf, start_pos),
+            ControlPacket::PUBLISH(p) => p.decode_variable_header(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
-        }
-    }
-    fn remain_length(&self) -> usize {
-        match self {
-            ControlPacket::CONNECT(p) => p.remain_length,
-            ControlPacket::PUBLISH(p) => p.remain_length,
-            _ => 0,
         }
     }
 }
@@ -173,10 +163,10 @@ impl ConnackProperties {
         }
         for v in &self.user_properties {
             buf.extend_from_slice(&[0x26]);
-            let l: u16 = v.0.len().try_into()?;
+            let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(v.0.as_bytes());
-            let l: u16 = v.1.len().try_into()?;
+            let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(v.1.as_bytes());
         }
@@ -198,19 +188,19 @@ impl ConnackProperties {
         }
         if let Some(c) = &self.response_information {
             buf.extend_from_slice(&[0x1a]);
-            let l: u16 = c.len().try_into()?;
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = &self.server_reference {
             buf.extend_from_slice(&[0x1c]);
-            let l: u16 = c.len().try_into()?;
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
         if let Some(c) = &self.authentication_method {
             buf.extend_from_slice(&[0x15]);
-            let l: u16 = c.len().try_into()?;
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
@@ -822,37 +812,6 @@ pub struct WillProperties {
     pub subscription_identifier: Option<SubscriptionIdentifier>,
 }
 
-impl Default for WillProperties {
-    fn default() -> Self {
-        Self {
-            will_delay_interval: 0,
-            payload_format_indicator: None,
-            message_expiry_interval: None,
-            content_type: None,
-            response_topic: None,
-            correlation_data: None,
-            user_properties: vec![],
-            subscription_identifier: 0,
-        }
-    }
-}
-
-impl Default for ConnectProperties {
-    fn default() -> Self {
-        Self {
-            session_expiry_interval: 0,
-            receive_maximum: u16::MAX,
-            maximum_packet_size: u32::MAX,
-            topic_alias_maximum: 0,
-            request_response_information: false,
-            request_problem_infromation: true,
-            user_properties: vec![],
-            authentication_method: None,
-            authentication_data: None,
-        }
-    }
-}
-
 #[inline]
 fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
     ((b_msb as u16) << 8) + b_lsb as u16
@@ -969,7 +928,7 @@ impl MqttPacket for Publish {
     // next_positionを返す
     // すべて揃っている前提としない、なぜならば、Publishには大量のデータが転送される可能性があるので、
     // メモリを節約したいから！
-    fn parse_variable_header(
+    fn decode_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -1072,21 +1031,18 @@ impl MqttPacket for Publish {
         return Ok(next_pos);
     }
 
-    fn parse_payload(
+    fn decode_payload(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
-    }
-
-    fn remain_length(&self) -> usize {
-        todo!();
+        Ok(0)
     }
 }
 
 impl MqttPacket for Connect {
     // Connectはすべて揃っている前提でデコードする
-    fn parse_variable_header(
+    fn decode_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -1192,7 +1148,7 @@ impl MqttPacket for Connect {
         return Ok(next_pos);
     }
 
-    fn parse_payload(
+    fn decode_payload(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -1264,6 +1220,9 @@ impl MqttPacket for Connect {
                             .get_or_insert_with(Vec::new)
                             .push(user_property);
                     }
+                    _ => {
+                        return Err(MqttError::InvalidFormat);
+                    }
                 }
             }
             // Will Topic
@@ -1290,150 +1249,9 @@ impl MqttPacket for Connect {
         }
         return Ok(next_pos);
     }
-
-    fn remain_length(&self) -> usize {
-        self.remain_length
-    }
 }
 impl Connect {
-    fn new(remain_length: usize) -> Self {
-        Self {
-            remain_length: remain_length,
-            protocol_ver: ProtocolVersion::Other,
-            clean_session: false,
-            will: false,
-            will_qos: 0,
-            will_retain: false,
-            will_payload: None,
-            will_topic: "".to_string(),
-            user_password_flag: false,
-            user_name_flag: false,
-            client_id: "".to_string(),
-            username: None,
-            password: None,
-            keepalive_timer: 0,
-            properties: ConnectProperties::default(),
-            will_properties: WillProperties::default(),
-        }
-    }
-
-    fn parse_connect_flag(&mut self, b: u8) {
-        self.clean_session = (b & 0b00000010) == 0b00000010;
-        self.will = (b & 0b00000100) == 0b00000100;
-        self.will_qos = (b & 0b00011000) >> 3;
-        self.will_retain = (b & 0b00100000) == 0b00100000;
-        self.user_password_flag = (b & 0b01000000) == 0b01000000;
-        self.user_name_flag = (b & 0b10000000) == 0b10000000;
-    }
-
     // return next position
-    fn parse_properties(
-        &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
-        property_length: usize,
-    ) -> Result<(), MqttError> {
-        let mut pos = start_pos;
-        loop {
-            //3 4 5 6 7 | 8
-            // start_pos = 3
-            // propety_length = 5
-            // pos = 8 -> OK
-            // pos means nextpos here.
-            if pos == start_pos + property_length {
-                break;
-            }
-            // overrun
-            if pos > start_pos + property_length {
-                return Err(MqttError::InvalidFormat);
-            }
-            println!("Connect Property 0x{:x}", buf[pos]);
-            match buf[pos] {
-                0x11 => {
-                    self.properties.session_expiry_interval = u32::from_be_bytes(
-                        buf[pos + 1..pos + 5]
-                            .try_into()
-                            .map_err(|_| MqttError::InvalidFormat)?,
-                    );
-                    pos = pos + 5;
-                    println!("0x11, {}", self.properties.session_expiry_interval)
-                }
-                0x21 => {
-                    self.properties.receive_maximum = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                    );
-                    pos = pos + 3;
-                    println!("0x21, {}", self.properties.receive_maximum);
-                }
-                0x27 => {
-                    self.properties.maximum_packet_size = u32::from_be_bytes(
-                        buf[pos + 1..pos + 5]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u32"))?,
-                    );
-                    pos = pos + 5;
-                }
-                0x22 => {
-                    self.properties.topic_alias_maximum = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
-                    );
-                    pos = pos + 3;
-                    println!("0x22, {}", self.properties.topic_alias_maximum);
-                }
-                0x19 => {
-                    self.properties.request_response_information = (buf[pos + 1] & 0b1) == 0b1;
-                    pos = pos + 2;
-                }
-                0x17 => {
-                    self.properties.request_problem_infromation = (buf[pos + 1] & 0b1) == 0b1;
-                    pos = pos + 2;
-                }
-                0x26 => {
-                    let (key, end_pos) = decode_utf8_string(&buf, pos + 1)?;
-                    let (value, end_pos) = decode_utf8_string(&buf, end_pos)?;
-                    self.properties.user_properties.push((key, value));
-                    pos = end_pos;
-                    println!("0x26, {:#?}", self.properties.user_properties)
-                }
-                0x15 => {
-                    match self.properties.authentication_method {
-                        Some(_) => {
-                            return Err(MqttError::InvalidFormat);
-                        }
-                        None => {}
-                    };
-
-                    let (method, end_pos) = decode_utf8_string(buf, pos + 1)?;
-                    self.properties.authentication_method = Some(method);
-                    pos = end_pos;
-                }
-                0x16 => {
-                    match self.properties.authentication_data {
-                        Some(_) => {
-                            return Err(MqttError::InvalidFormat);
-                        }
-                        None => {}
-                    };
-                    let length = u16::from_be_bytes(
-                        buf[pos + 1..pos + 3]
-                            .try_into()
-                            .map_err(|_| anyhow::Error::msg("Invalid slice length for u16"))?,
-                    ) as usize;
-                    let data = &buf[pos + 3..pos + 3 + length];
-                    // copy
-                    self.properties.authentication_data = Some(bytes::Bytes::copy_from_slice(data));
-                    pos = pos + 3 + length;
-                }
-
-                code => return Err(MqttError::InvalidFormat),
-            }
-        }
-        return Ok(());
-    }
 }
 
 pub struct Disconnect {
@@ -1448,21 +1266,12 @@ impl Disconnect {
     }
 }
 
-#[derive(PartialEq, Debug)]
-pub enum ProtocolVersion {
-    V3,
-    V3_1,
-    V3_1_1,
-    V5,
-    Other,
-}
-
-pub mod parser {
+pub mod decoder {
     use super::{
         decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket,
     };
     // (, consumed size)
-    pub fn parse_fixed_header(buf: &bytes::BytesMut) -> Result<(ControlPacket, usize), MqttError> {
+    pub fn decode_fixed_header(buf: &bytes::BytesMut) -> Result<(ControlPacket, usize), MqttError> {
         println!("{:#b}", buf[0]);
         match buf[0] >> 4 {
             0b0001 => {
@@ -1492,7 +1301,7 @@ pub mod parser {
 mod tests {
     use bytes::Buf;
 
-    use super::parser::*;
+    use super::decoder::*;
     use crate::mqtt::ControlPacket;
     use crate::mqtt::*;
     fn decode_hex(str: &str) -> bytes::BytesMut {
@@ -1528,14 +1337,14 @@ mod tests {
     fn connect_minimum_parse() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
         let mut b = decode_hex(input);
-        let ret = parse_fixed_header(&b);
+        let ret = decode_fixed_header(&b);
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
             // variable header
-            let ret = connect.parse_variable_header(&b, 0);
+            let ret = connect.decode_variable_header(&b, 0);
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver {
                 ProtocolVersion::V5 => {}
@@ -1552,7 +1361,7 @@ mod tests {
             println!("variable {}", consumed);
             b.advance(consumed);
 
-            let res = connect.parse_payload(&b, consumed);
+            let res = connect.decode_payload(&b, consumed);
             assert!(res.is_ok());
             assert_eq!(connect.client_id, "publish-549".to_string());
         } else {
@@ -1583,7 +1392,7 @@ mod tests {
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
-            let ret = connect.parse_variable_header(&b, 0);
+            let ret = connect.decode_variable_header(&b, 0);
             println!("Hello");
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver {
@@ -1594,7 +1403,7 @@ mod tests {
             println!("variable {}", consumed);
             b.advance(consumed);
 
-            let res = connect.parse_payload(&b, consumed);
+            let res = connect.decode_payload(&b, consumed);
             assert!(res.is_ok());
             assert_eq!(connect.client_id, "publish-710".to_string());
             println!(">>>> {:?}", connect);
