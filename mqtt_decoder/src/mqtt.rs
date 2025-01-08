@@ -264,10 +264,10 @@ pub struct Publish {
     pub packet_id: Option<PacketId>, /* 2byte integer */
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Retain(bool); // fixed header
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct TopicName(String); // variable header
 
 impl TopicName {
@@ -280,7 +280,7 @@ impl TopicName {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct PacketId(u16);
 impl PacketId {
     fn try_from(
@@ -330,7 +330,7 @@ struct PublishProperties {
     content_type: Option<ContentType>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[repr(u8)]
 enum PublishProperty {
     PayloadFormatIndicator(PayloadFormatIndicator),
@@ -343,7 +343,7 @@ enum PublishProperty {
     ContentType(ContentType),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 enum PayloadFormatIndicator {
     UnspecifiedBytes,
     UTF8,
@@ -362,7 +362,7 @@ impl PayloadFormatIndicator {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct MessageExpiryInterval(u32);
 impl MessageExpiryInterval {
     fn try_from(
@@ -378,7 +378,7 @@ impl MessageExpiryInterval {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct TopicAlias(u16);
 impl TopicAlias {
     fn try_from(
@@ -396,7 +396,7 @@ impl TopicAlias {
 /*
  サイズを返す場合は一貫して次の絶対位置で返す
 */
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct ResponseTopic(String);
 impl ResponseTopic {
     fn try_from(
@@ -408,7 +408,7 @@ impl ResponseTopic {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct CorrelationData(bytes::Bytes);
 impl CorrelationData {
     fn try_from(
@@ -427,7 +427,7 @@ impl CorrelationData {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct UserProperty((String, String));
 impl UserProperty {
     fn try_from(
@@ -440,7 +440,7 @@ impl UserProperty {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct SubscriptionIdentifier(u32);
 impl SubscriptionIdentifier {
     fn try_from(
@@ -456,7 +456,7 @@ impl SubscriptionIdentifier {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct ContentType(String);
 impl ContentType {
     fn try_from(
@@ -468,7 +468,7 @@ impl ContentType {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 enum QoS {
     #[default]
     QoS0,
@@ -488,7 +488,7 @@ impl TryFrom<u8> for QoS {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Connect {
     pub remain_length: usize,
     pub protocol_name: ProtocolName,
@@ -504,7 +504,7 @@ pub struct Connect {
     pub will_payload: Option<WillPayload>,
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct ProtocolName(String);
 
 impl ProtocolName {
@@ -519,7 +519,7 @@ impl ProtocolName {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct ProtocolVersion(u8);
 impl ProtocolVersion {
     fn try_from(
@@ -528,9 +528,12 @@ impl ProtocolVersion {
     ) -> std::result::Result<(Self, usize), MqttError> {
         Ok((ProtocolVersion(buf[start_pos]), start_pos + 1))
     }
+    fn into_inner(self) -> u8 {
+        self.0
+    }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct ConnectFlags {
     user_name_flag: bool,
     password_flag: bool,
@@ -571,7 +574,7 @@ impl ConnectFlags {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct KeepAlive(u16);
 impl KeepAlive {
     fn try_from(
@@ -583,11 +586,14 @@ impl KeepAlive {
             start_pos + 2,
         ))
     }
+    fn into_inner(self) -> u16 {
+        self.0
+    }
 }
 
 // Connect Properties
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct SessionExpiryInterval(u32);
 impl SessionExpiryInterval {
     fn try_from(
@@ -601,9 +607,12 @@ impl SessionExpiryInterval {
         );
         return Ok((SessionExpiryInterval(i), start_pos + 4));
     }
+    fn into_inner(self) -> u32 {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct ReceiveMaximum(u16);
 impl ReceiveMaximum {
     fn try_from(
@@ -617,9 +626,12 @@ impl ReceiveMaximum {
         }
         return Ok((ReceiveMaximum(i), start_pos + 2));
     }
+    fn into_inner(self) -> u16 {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct MaximumPacketSize(u32);
 impl MaximumPacketSize {
     fn try_from(
@@ -636,9 +648,12 @@ impl MaximumPacketSize {
         }
         return Ok((Self(i), start_pos + 4));
     }
+    fn into_inner(self) -> u32 {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct TopicAliasMaximum(u16);
 impl TopicAliasMaximum {
     fn try_from(
@@ -652,9 +667,12 @@ impl TopicAliasMaximum {
         }
         return Ok((Self(i), start_pos + 2));
     }
+    fn into_inner(self) -> u16 {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct RequestResponseInformation(bool);
 impl RequestResponseInformation {
     fn try_from(
@@ -670,9 +688,12 @@ impl RequestResponseInformation {
         };
         return Ok((Self(i), start_pos + 1));
     }
+    fn into_inner(self) -> bool {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct RequestProblemInformation(bool);
 impl RequestProblemInformation {
     fn try_from(
@@ -688,9 +709,12 @@ impl RequestProblemInformation {
         };
         return Ok((Self(i), start_pos + 1));
     }
+    fn into_inner(self) -> bool {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct AuthenticationMethod(String);
 impl AuthenticationMethod {
     fn try_from(
@@ -700,9 +724,12 @@ impl AuthenticationMethod {
         let (i, s) = decode_utf8_string(buf, start_pos)?;
         return Ok((Self(i), s));
     }
+    fn into_inner(self) -> String {
+        self.0
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct AuthenticationData(bytes::Bytes);
 impl AuthenticationData {
     fn try_from(
@@ -719,10 +746,13 @@ impl AuthenticationData {
             start_pos + 2 + length,
         ));
     }
+    fn into_inner(self) -> bytes::Bytes {
+        self.0
+    }
 }
 
 // Will Properties
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 struct WillDelayInterval(u32);
 impl WillDelayInterval {
     fn try_from(
@@ -736,10 +766,13 @@ impl WillDelayInterval {
         );
         return Ok((Self(i), start_pos + 4));
     }
+    fn into_inner(self) -> u32 {
+        self.0
+    }
 }
 
 // Will Payload
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct WillPayload(bytes::Bytes);
 impl WillPayload {
     fn try_from(
@@ -756,10 +789,13 @@ impl WillPayload {
             start_pos + 2 + length,
         ));
     }
+    fn into_inner(self) -> bytes::Bytes {
+        self.0
+    }
 }
 
 // User Name
-#[derive(Debug, PartialEq, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct UserName(String);
 impl UserName {
     fn try_from(
@@ -769,10 +805,13 @@ impl UserName {
         let (i, s) = decode_utf8_string(buf, start_pos)?;
         return Ok((Self(i), s));
     }
+    fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 // Will Payload
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Password(bytes::Bytes);
 impl Password {
     fn try_from(
@@ -789,9 +828,12 @@ impl Password {
             start_pos + 2 + length,
         ));
     }
+    fn into_inner(self) -> bytes::Bytes {
+        self.0
+    }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct ConnectProperties {
     pub session_expiry_interval: Option<SessionExpiryInterval>,
     pub receive_maximum: Option<ReceiveMaximum>,
@@ -803,7 +845,7 @@ pub struct ConnectProperties {
     pub authentication_method: Option<AuthenticationMethod>,
     pub authentication_data: Option<AuthenticationData>,
 }
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct WillProperties {
     pub will_delay_interval: Option<WillDelayInterval>,
     pub payload_format_indicator: Option<PayloadFormatIndicator>,
@@ -912,7 +954,7 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
     remaining_length
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct ClientId(String);
 impl ClientId {
     fn try_from(
@@ -924,6 +966,9 @@ impl ClientId {
             return Err(MqttError::InvalidFormat);
         }
         Ok((Self(res), pos))
+    }
+    fn into_inner(self) -> String {
+        self.0
     }
 }
 
@@ -1349,24 +1394,24 @@ mod tests {
             // variable header
             let ret = connect.decode_variable_header(&b, 0);
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
-            match connect.protocol_ver {
-                ProtocolVersion::V5 => {}
+            match connect.protocol_ver.into_inner() {
+                0x05 => {}
                 _ => panic!("Protocol unmatch"),
             }
-            assert_eq!(connect.clean_session, true);
-            assert_eq!(connect.will, false);
-            assert_eq!(connect.will_qos, 0);
-            assert_eq!(connect.will_retain, false);
-            assert_eq!(connect.user_name_flag, false);
-            assert_eq!(connect.user_password_flag, false);
-            assert_eq!(connect.keepalive_timer, 60);
+            assert_eq!(connect.connect_flags.clean_start, true);
+            assert_eq!(connect.connect_flags.will_flag, false);
+            assert_eq!(connect.connect_flags.will_qos, QoS::QoS0);
+            assert_eq!(connect.connect_flags.will_retain, false);
+            assert_eq!(connect.connect_flags.user_name_flag, false);
+            assert_eq!(connect.connect_flags.password_flag, false);
+            assert_eq!(connect.keepalive.clone().into_inner(), 60);
             let consumed = ret.unwrap();
             println!("variable {}", consumed);
             b.advance(consumed);
 
             let res = connect.decode_payload(&b, consumed);
             assert!(res.is_ok());
-            assert_eq!(connect.client_id, "publish-549".to_string());
+            assert_eq!(connect.client_id.into_inner(), "publish-549".to_string());
         } else {
             panic!("packet type error")
         }
@@ -1389,7 +1434,7 @@ mod tests {
         f75725f757365726e616d65000d796f75725f70617373776f7264";
 
         let mut b = decode_hex(input);
-        let ret = parse_fixed_header(&b);
+        let ret = decode_fixed_header(&b);
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);
@@ -1398,8 +1443,8 @@ mod tests {
             let ret = connect.decode_variable_header(&b, 0);
             println!("Hello");
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
-            match connect.protocol_ver {
-                ProtocolVersion::V5 => {}
+            match connect.protocol_ver.into_inner() {
+                0x05 => {}
                 _ => panic!("Protocol unmatch"),
             }
             let consumed = ret.unwrap();
@@ -1408,65 +1453,92 @@ mod tests {
 
             let res = connect.decode_payload(&b, consumed);
             assert!(res.is_ok());
-            assert_eq!(connect.client_id, "publish-710".to_string());
+            assert_eq!(
+                connect.client_id.clone().into_inner(),
+                "publish-710".to_string()
+            );
             println!(">>>> {:?}", connect);
 
-            assert_eq!(connect.clean_session, true);
-            assert_eq!(connect.will, true);
-            assert_eq!(connect.will_qos, 1);
-            assert_eq!(connect.will_retain, false);
-            assert_eq!(connect.user_name_flag, true);
-            assert_eq!(connect.user_password_flag, true);
-            assert_eq!(connect.keepalive_timer, 60);
+            assert_eq!(connect.connect_flags.clean_start, true);
+            assert_eq!(connect.connect_flags.will_flag, true);
+            assert_eq!(connect.connect_flags.will_qos, QoS::QoS1);
+            assert_eq!(connect.connect_flags.will_retain, false);
+            assert_eq!(connect.connect_flags.user_name_flag, true);
+            assert_eq!(connect.connect_flags.password_flag, true);
+            assert_eq!(connect.keepalive.into_inner(), 60);
 
-            assert_eq!(connect.properties.session_expiry_interval, 120);
-            assert_eq!(connect.properties.receive_maximum, 20);
-            assert_eq!(connect.properties.maximum_packet_size, 256 * 1024);
-            assert_eq!(connect.properties.topic_alias_maximum, 10);
-            assert_eq!(connect.properties.request_problem_infromation, true);
-            assert_eq!(connect.properties.request_response_information, true);
+            assert_eq!(
+                connect.properties.session_expiry_interval,
+                Some(SessionExpiryInterval(120))
+            );
+            assert_eq!(connect.properties.receive_maximum, Some(ReceiveMaximum(20)));
+            assert_eq!(
+                connect.properties.maximum_packet_size,
+                Some(MaximumPacketSize(256 * 1024))
+            );
+            assert_eq!(
+                connect.properties.topic_alias_maximum,
+                Some(TopicAliasMaximum(10))
+            );
+            assert_eq!(
+                connect.properties.request_problem_information,
+                Some(RequestProblemInformation(true))
+            );
+            assert_eq!(
+                connect.properties.request_response_information,
+                Some(RequestResponseInformation(true))
+            );
             assert_eq!(
                 connect.properties.user_properties,
-                [
-                    ("connect_key1".to_string(), "connect_value1".to_string()),
-                    ("connect_key2".to_string(), "connect_value2".to_string())
-                ]
+                Some(vec![
+                    UserProperty(("connect_key1".to_string(), "connect_value1".to_string())),
+                    UserProperty(("connect_key2".to_string(), "connect_value2".to_string()))
+                ])
             );
             assert_eq!(
                 connect.properties.authentication_method,
-                Some("example_auth_method".to_string())
+                Some(AuthenticationMethod("example_auth_method".to_string()))
             );
             assert_eq!(
                 connect.properties.authentication_data,
-                Some(bytes::Bytes::copy_from_slice(
+                Some(AuthenticationData(bytes::Bytes::copy_from_slice(
                     "example_auth_data".as_bytes()
-                ))
+                )))
             );
             /* will */
-            assert_eq!(connect.will_properties.will_delay_interval, 10);
-            assert_eq!(connect.will_properties.message_expiry_interval, Some(30));
+            assert_eq!(
+                connect.will_properties.will_delay_interval,
+                Some(WillDelayInterval(10))
+            );
+            assert_eq!(
+                connect.will_properties.message_expiry_interval,
+                Some(MessageExpiryInterval(30))
+            );
             assert_eq!(
                 connect.will_properties.content_type,
-                Some("text/plain".to_string())
+                Some(ContentType("text/plain".to_string()))
             );
-            assert_eq!(connect.will_properties.payload_format_indicator, Some(true));
+            assert_eq!(
+                connect.will_properties.payload_format_indicator,
+                Some(PayloadFormatIndicator::UTF8)
+            );
             assert_eq!(
                 connect.will_properties.response_topic,
-                Some("test/response".to_string())
+                Some(ResponseTopic("test/response".to_string()))
             );
             assert_eq!(
                 connect.will_properties.correlation_data,
-                Some(bytes::Bytes::copy_from_slice(
+                Some(CorrelationData(bytes::Bytes::copy_from_slice(
                     "correlation_data_example".as_bytes()
-                ))
+                )))
             );
             assert_eq!(
                 connect.will_properties.user_properties,
-                [
-                    ("key1".to_string(), "value1".to_string()),
-                    ("key2".to_string(), "value2".to_string()),
-                    ("key3".to_string(), "value3".to_string())
-                ]
+                Some(vec![
+                    UserProperty(("key1".to_string(), "value1".to_string())),
+                    UserProperty(("key2".to_string(), "value2".to_string())),
+                    UserProperty(("key3".to_string(), "value3".to_string()))
+                ])
             );
         }
     }
