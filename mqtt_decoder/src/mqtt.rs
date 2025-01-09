@@ -1,3 +1,9 @@
+/*
+[TODO]
+- lib.rsのエラーを除去
+- テストを通す
+*/
+
 use bytes::BufMut;
 use thiserror::Error;
 
@@ -253,10 +259,10 @@ impl Connack {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub struct Publish {
     pub remain_length: usize,
-    pub dup: bool,
+    pub dup: Dup,
     pub qos: QoS,
     pub retain: Retain,
     pub topic_name: Option<TopicName>,
@@ -264,8 +270,29 @@ pub struct Publish {
     pub packet_id: Option<PacketId>, /* 2byte integer */
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 struct Retain(bool); // fixed header
+
+#[derive(Debug, PartialEq, Clone, Default)]
+struct Dup(bool); // fixed header
+
+fn decode_lower_fixed_header(
+    buf: &bytes::BytesMut,
+    start_pos: usize,
+) -> Result<(Dup, QoS, Retain), MqttError> {
+    let q = match (buf[start_pos] & 0b0000110) >> 1 {
+        0b00 => QoS::QoS0,
+        0b01 => QoS::QoS1,
+        0b11 => QoS::QoS2,
+        _ => return Err(MqttError::InvalidFormat),
+    };
+
+    Ok((
+        Dup((buf[start_pos] & 0b00001000) != 0),
+        q,
+        Retain((buf[start_pos] & 0b00000001) != 0),
+    ))
+}
 
 #[derive(Debug, PartialEq, Clone)]
 struct TopicName(String); // variable header
@@ -318,7 +345,7 @@ const PROPERTY_AUTHENTICATION_DATA: u8 = 0x16;
 const PROPERTY_WILL_DELAY_INTERVAL: u8 = 0x18;
 
 // [TODO] ConnectProperties / WillPropertyもこうする
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 struct PublishProperties {
     payload_format_indicator: Option<PayloadFormatIndicator>,
     message_expiry_interval: Option<MessageExpiryInterval>,
@@ -1313,31 +1340,46 @@ impl Disconnect {
 
 pub mod decoder {
     use super::{
-        decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket,
+        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect,
+        MqttError, MqttPacket, Publish,
     };
-    // (, consumed size)
-    pub fn decode_fixed_header(buf: &bytes::BytesMut) -> Result<(ControlPacket, usize), MqttError> {
+    // (, next_pos size)
+    pub fn decode_fixed_header(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<(ControlPacket, usize), MqttError> {
         // 最初が0である前提
         match buf[0] >> 4 {
             0b0001 => {
-                let (remaining_length, next_pos) = decode_variable_length(buf, 1)?;
-                println!("remain :{}", remaining_length);
-                let consumed_bytes = 1 /* header */ + next_pos /* end - start + 1 */;
-
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
                 return Result::Ok((
                     ControlPacket::CONNECT(Connect {
                         remain_length: remaining_length,
                         ..Default::default()
                     }),
-                    consumed_bytes,
+                    next_pos,
                 ));
             }
             0b1110 => {
-                let (remaining_length, endpos) = decode_variable_length(buf, 1)?;
-                let consumed_bytes = 1 /* header */ + (endpos - 1) + 1;
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
                 return Result::Ok((
                     ControlPacket::DISCONNECT(Disconnect::new(remaining_length)),
-                    consumed_bytes,
+                    next_pos,
+                ));
+            }
+            // PUBLISH
+            0b0011 => {
+                let (dup, qos, retain) = decode_lower_fixed_header(buf, start_pos)?;
+                let (remain_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBLISH(Publish {
+                        remain_length: remain_length,
+                        qos: qos,
+                        dup: dup,
+                        retain: retain,
+                        ..Default::default()
+                    }),
+                    next_pos,
                 ));
             }
             _control_type => return Err(MqttError::InvalidFormat),
@@ -1385,11 +1427,11 @@ mod tests {
     fn connect_minimum_parse() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b);
+        let ret = decode_fixed_header(&b, 0);
         assert!(ret.is_ok());
-        let (packet, consumed) = ret.unwrap();
-        println!("aaaaaa:{}", consumed);
-        b.advance(consumed);
+        let (packet, next_pos) = ret.unwrap();
+        println!("aaaaaa:{}", next_pos);
+        b.advance(next_pos);
         if let ControlPacket::CONNECT(mut connect) = packet {
             // variable header
             let ret = connect.decode_variable_header(&b, 0);
@@ -1434,7 +1476,7 @@ mod tests {
         f75725f757365726e616d65000d796f75725f70617373776f7264";
 
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b);
+        let ret = decode_fixed_header(&b, 0);
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);

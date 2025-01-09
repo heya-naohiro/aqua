@@ -2,6 +2,10 @@ protocolとして、Towerを採用する
 Towerはhttp以外にも使えるらしい
 https://github.com/tower-rs/tower/tree/master/guides
 
+メモ：decoderのみのテスト
+```
+cargo test --package mqtt_decoder --lib mqtt
+```
 
 
 // Request Bodyはhttp=axum用語

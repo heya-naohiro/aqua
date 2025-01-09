@@ -1,3 +1,4 @@
+/*
 use bytes::{Buf, BytesMut};
 use futures_util::Stream;
 use mqtt::ControlPacket;
@@ -5,7 +6,9 @@ use mqtt::{parser::parse_fixed_header, MqttError, MqttPacket};
 use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+ */
 mod mqtt;
+/*
 
 //元の(tcp)Streamを受け取ってMQTTStreamに変換する
 
@@ -239,3 +242,4 @@ mod tests {
         // assert
     }
 }
+*/
