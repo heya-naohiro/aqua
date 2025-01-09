@@ -540,9 +540,9 @@ impl ProtocolName {
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
         let length = (((buf[start_pos] as usize) << 8) + (buf[start_pos + 1] as usize)) as usize;
-        let ret = String::from_utf8(buf[start_pos + 1..start_pos + 1 + length].to_vec())
+        let ret = String::from_utf8(buf[start_pos + 2..start_pos + 2 + length].to_vec())
             .or_else(|_| Err(MqttError::InvalidFormat))?;
-        Ok((ProtocolName(ret), start_pos + 1 + length))
+        Ok((ProtocolName(ret), start_pos + 2 + length))
     }
 }
 
@@ -953,16 +953,16 @@ pub fn decode_variable_length(
     let mut remaining_length: usize = 0;
     let mut inc = 0;
     for pos in start_pos..=start_pos + 3 {
-        if buf.len() < pos {
+        if buf.len() <= pos {
             return Err(MqttError::InsufficientBytes);
         }
         remaining_length += ((buf[pos] & 0b01111111) as usize) << (inc * 7);
         if (buf[pos] & 0b10000000) == 0 {
-            return Ok((remaining_length, pos));
+            return Ok((remaining_length, pos + 1)); // 次のバイト位置を返す
         }
         inc += 1;
     }
-    Ok((remaining_length, start_pos + 3))
+    Ok((remaining_length, start_pos + 4)) // 全4バイトを処理した場合も次の位置を返す
 }
 
 fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
@@ -988,10 +988,14 @@ impl ClientId {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
+        dbg!(buf[start_pos]);
         let (res, pos) = decode_utf8_string(buf, start_pos)?;
+        dbg!(&res);
+        /*
         if !res.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(MqttError::InvalidFormat);
         }
+         */
         Ok((Self(res), pos))
     }
     fn into_inner(self) -> String {
@@ -1124,21 +1128,22 @@ impl MqttPacket for Connect {
     ) -> Result<usize, MqttError> {
         let (result, mut next_pos) = ProtocolName::try_from(buf, start_pos)?;
         self.protocol_name = result;
-
         (self.protocol_ver, next_pos) = ProtocolVersion::try_from(buf, next_pos)?;
         (self.connect_flags, next_pos) = ConnectFlags::try_from(buf, next_pos)?;
         (self.keepalive, next_pos) = KeepAlive::try_from(buf, next_pos)?;
-
         let property_length;
+        dbg!(format!("0x{:x}", buf[next_pos]));
         (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
         let end_pos = next_pos + property_length;
         loop {
+            dbg!(next_pos, end_pos);
             if next_pos == end_pos {
                 break;
             }
             if next_pos > end_pos {
                 return Err(MqttError::InvalidFormat);
             }
+            dbg!(format!("0x{:x}", buf[next_pos]));
             match buf[next_pos] {
                 PROPERTY_SESSION_EXPIRY_INTERVAL => {
                     if let Some(_) = self.properties.session_expiry_interval {
@@ -1163,6 +1168,14 @@ impl MqttPacket for Connect {
                     let result;
                     (result, next_pos) = MaximumPacketSize::try_from(buf, next_pos + 1)?;
                     self.properties.maximum_packet_size = Some(result);
+                }
+                PROPERTY_TOPIC_ALIAS_MAXIMUM => {
+                    if let Some(_) = self.properties.topic_alias_maximum {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = TopicAliasMaximum::try_from(buf, next_pos + 1)?;
+                    self.properties.topic_alias_maximum = Some(result);
                 }
                 PROPERTY_REQUEST_RESPONSE_INFORMATION => {
                     if let Some(_) = self.properties.request_response_information {
@@ -1230,7 +1243,10 @@ impl MqttPacket for Connect {
     ) -> Result<usize, MqttError> {
         // Client Identifier(MUST)
         let mut next_pos;
+        dbg!("decode_payload");
+        dbg!(start_pos);
         (self.client_id, next_pos) = ClientId::try_from(buf, start_pos)?;
+        dbg!(&self.client_id);
         if self.connect_flags.will_flag {
             // Will Properties
             // properties length
@@ -1238,13 +1254,16 @@ impl MqttPacket for Connect {
             let will_property_length;
             (will_property_length, next_pos) = decode_variable_length(buf, next_pos)?;
             let end_pos = next_pos + will_property_length;
+
             loop {
+                dbg!(next_pos, end_pos);
                 if next_pos == end_pos {
                     break;
                 }
                 if next_pos > end_pos {
                     return Err(MqttError::InvalidFormat);
                 }
+                dbg!(format!("0x{:x}", buf[next_pos]));
                 match buf[next_pos] {
                     PROPERTY_WILL_DELAY_INTERVAL => {
                         if let Some(_) = self.will_properties.will_delay_interval {
@@ -1286,6 +1305,15 @@ impl MqttPacket for Connect {
                         (ret, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
                         self.will_properties.response_topic = Some(ret);
                     }
+                    PROPERTY_CORRELATION_DATA_ID => {
+                        // It is a Protocol Error to include the Topic Alias value more than once.
+                        if self.will_properties.correlation_data != None {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
+                        self.will_properties.correlation_data = Some(result);
+                    }
                     PROPERTY_USER_PROPERTY_ID => {
                         let user_property;
                         (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
@@ -1314,14 +1342,19 @@ impl MqttPacket for Connect {
         if self.connect_flags.user_name_flag {
             let ret;
             (ret, next_pos) = UserName::try_from(buf, next_pos)?;
+
             self.username = Some(ret);
+            dbg!(&self.username);
         }
         // Password
         if self.connect_flags.password_flag {
             let ret;
             (ret, next_pos) = Password::try_from(buf, next_pos)?;
             self.password = Some(ret);
+            dbg!(&self.password);
         }
+        dbg!("all dne");
+
         return Ok(next_pos);
     }
 }
@@ -1352,6 +1385,8 @@ pub mod decoder {
         match buf[0] >> 4 {
             0b0001 => {
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                dbg!(next_pos);
+
                 return Result::Ok((
                     ControlPacket::CONNECT(Connect {
                         remain_length: remaining_length,
@@ -1424,16 +1459,20 @@ mod tests {
          */
     /* v5 */
     #[test]
-    fn connect_minimum_parse() {
+    fn connect_minimum_decode() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
         let mut b = decode_hex(input);
         let ret = decode_fixed_header(&b, 0);
         assert!(ret.is_ok());
         let (packet, next_pos) = ret.unwrap();
-        println!("aaaaaa:{}", next_pos);
+        dbg!(next_pos);
+        // | 0 1 2 3 | 4 5 6 7 |
+        // 4から始めたい場合は4つ進める
         b.advance(next_pos);
         if let ControlPacket::CONNECT(mut connect) = packet {
             // variable header
+            dbg!(format!("0x{:x}", b[0]));
+            dbg!(format!("0x{:x}", b[1]));
             let ret = connect.decode_variable_header(&b, 0);
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver.into_inner() {
@@ -1447,11 +1486,11 @@ mod tests {
             assert_eq!(connect.connect_flags.user_name_flag, false);
             assert_eq!(connect.connect_flags.password_flag, false);
             assert_eq!(connect.keepalive.clone().into_inner(), 60);
-            let consumed = ret.unwrap();
-            println!("variable {}", consumed);
-            b.advance(consumed);
+            let next_pos = ret.unwrap();
+            println!("variable {}", next_pos);
+            b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, consumed);
+            let res = connect.decode_payload(&b, 0);
             assert!(res.is_ok());
             assert_eq!(connect.client_id.into_inner(), "publish-549".to_string());
         } else {
@@ -1483,17 +1522,15 @@ mod tests {
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
             let ret = connect.decode_variable_header(&b, 0);
-            println!("Hello");
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver.into_inner() {
                 0x05 => {}
                 _ => panic!("Protocol unmatch"),
             }
-            let consumed = ret.unwrap();
-            println!("variable {}", consumed);
-            b.advance(consumed);
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, consumed);
+            let res = connect.decode_payload(&b, 0);
             assert!(res.is_ok());
             assert_eq!(
                 connect.client_id.clone().into_inner(),
