@@ -1,7 +1,6 @@
 /*
 [TODO]
-- lib.rsのエラーを除去
-- テストを通す
+- connectのテストを書く
 */
 
 use bytes::BufMut;
@@ -316,7 +315,7 @@ impl PacketId {
     ) -> std::result::Result<(Self, usize), MqttError> {
         Ok((
             PacketId(((buf[start_pos] as u16) << 8) + buf[start_pos + 1] as u16),
-            2,
+            start_pos + 2,
         ))
     }
 }
@@ -412,7 +411,7 @@ impl TopicAlias {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
-        let i = (buf[start_pos] as u16) << 8 + (buf[start_pos + 1] as u16);
+        let i = ((buf[start_pos] as u16) << 8) + (buf[start_pos + 1] as u16);
         if i == 0 {
             return Err(MqttError::InvalidFormat);
         }
@@ -1015,29 +1014,35 @@ impl MqttPacket for Publish {
         // topic name UTF-8 Encoded String
         let (result, mut next_pos) = TopicName::try_from(buf, start_pos)?;
         self.topic_name = Some(result);
-
+        dbg!(&self.topic_name);
         // packet identifier
         if self.qos == QoS::QoS1 || self.qos == QoS::QoS2 {
             // check
+            dbg!(self.qos);
             if buf.len() < next_pos + 1 {
                 return Err(MqttError::InsufficientBytes.into());
             }
             let result;
             (result, next_pos) = PacketId::try_from(buf, next_pos)?;
+
             self.packet_id = Some(result);
         }
         // Properties
         let property_length;
+
         (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+
         // 9 | 10 11 12 13 14 | [ ]
         let end_pos = next_pos + property_length;
         loop {
+            dbg!(next_pos, end_pos);
             if next_pos == end_pos {
                 break;
             }
             if next_pos > end_pos {
                 return Err(MqttError::InvalidFormat);
             }
+            dbg!(format!("0x{:x}", buf[next_pos]));
             match buf[next_pos] {
                 PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
                     let result;
@@ -1497,7 +1502,36 @@ mod tests {
             panic!("packet type error")
         }
     }
-
+    #[test]
+    fn mqtt_publish() {
+        let input = "3328000b68656c6c6f2f746f70696300011123\
+        000126000161000132260001630001337061796c6f6164";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0);
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        b.advance(consumed);
+        if let ControlPacket::PUBLISH(mut publish) = packet {
+            let ret = publish.decode_variable_header(&b, 0);
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            let consumed = ret.unwrap();
+            b.advance(consumed);
+            let res = publish.decode_payload(&b, 0);
+            assert_eq!(publish.qos, QoS::QoS1);
+            assert_eq!(publish.retain, Retain(true));
+            assert_eq!(
+                publish.topic_name,
+                Some(TopicName("hello/topic".to_string()))
+            );
+            assert_eq!(
+                publish.pub_properties.user_properties,
+                Some(vec![
+                    UserProperty(("a".to_string(), "2".to_string())),
+                    UserProperty(("c".to_string(), "3".to_string()))
+                ])
+            );
+        }
+    }
     #[test]
     fn mqtt5_connect_all_parse() {
         let input = "10bd0200044d51545405ce003c7c110000007\

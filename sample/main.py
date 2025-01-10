@@ -3,7 +3,7 @@ from paho.mqtt import properties;
 from paho.mqtt import packettypes;
 import random
 
-broker = '192.168.0.100'
+broker = '127.0.0.1'
 port = 1883
 topic = "python/mqtt"
 client_id = f'publish-{random.randint(0, 1000)}'
@@ -60,5 +60,13 @@ def run():
 
     client.connect(broker, port, properties=connect_properties)
 
+    publish_properties = properties.Properties(properties.PacketTypes.PUBLISH)
+    publish_properties.UserProperty = ("a", "2")
+    publish_properties.UserProperty = ("c", "3")
+    
+    client.publish(topic="hello/topic", payload="payload", qos=1, retain=True, properties=publish_properties)
+
 if __name__ == '__main__':
     run()
+    
+    
