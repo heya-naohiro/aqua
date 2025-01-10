@@ -63,7 +63,11 @@ def run():
     publish_properties = properties.Properties(properties.PacketTypes.PUBLISH)
     publish_properties.UserProperty = ("a", "2")
     publish_properties.UserProperty = ("c", "3")
-    
+    publish_properties.MessageExpiryInterval = 60  # メッセージの有効期限（秒）
+    publish_properties.PayloadFormatIndicator = 1  # ペイロードがUTF-8形式であることを示す
+    publish_properties.ContentType = "text/plain"
+    publish_properties.ResponseTopic = "response/topic"
+    publish_properties.CorrelationData = b"12345"
     client.publish(topic="hello/topic", payload="payload", qos=1, retain=True, properties=publish_properties)
 
 if __name__ == '__main__':

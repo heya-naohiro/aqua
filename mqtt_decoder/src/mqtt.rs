@@ -1532,6 +1532,64 @@ mod tests {
             );
         }
     }
+
+    // full
+    // 3352000b68656c6c6f2f746f70696300013b0101020000003c03000a746578742f706c61696e08000e726573706f6e73652f746f706963090005313233343526000161000132260001630001337061796c6f6164
+    #[test]
+    fn mqtt_publish_full() {
+        let input = "3352000b68656c6c6f2f746f70696300013b01010\
+        20000003c03000a746578742f706c61696e08000e726573706f6e7\
+        3652f746f706963090005313233343526000161000132260001630\
+        001337061796c6f6164";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0);
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        b.advance(consumed);
+        if let ControlPacket::PUBLISH(mut publish) = packet {
+            let ret = publish.decode_variable_header(&b, 0);
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            let consumed = ret.unwrap();
+            b.advance(consumed);
+            let res = publish.decode_payload(&b, 0);
+            assert_eq!(publish.qos, QoS::QoS1);
+            assert_eq!(publish.retain, Retain(true));
+            assert_eq!(
+                publish.topic_name,
+                Some(TopicName("hello/topic".to_string()))
+            );
+            assert_eq!(
+                publish.pub_properties.user_properties,
+                Some(vec![
+                    UserProperty(("a".to_string(), "2".to_string())),
+                    UserProperty(("c".to_string(), "3".to_string()))
+                ])
+            );
+            assert_eq!(
+                publish.pub_properties.message_expiry_interval,
+                Some(MessageExpiryInterval(60))
+            );
+            assert_eq!(
+                publish.pub_properties.payload_format_indicator,
+                Some(PayloadFormatIndicator::UTF8)
+            );
+            assert_eq!(
+                publish.pub_properties.content_type,
+                Some(ContentType("text/plain".to_string()))
+            );
+            assert_eq!(
+                publish.pub_properties.response_topic,
+                Some(ResponseTopic("response/topic".to_string()))
+            );
+            assert_eq!(
+                publish.pub_properties.correlation_data,
+                Some(CorrelationData(bytes::Bytes::copy_from_slice(
+                    "12345".as_bytes()
+                )))
+            )
+        }
+    }
+
     #[test]
     fn mqtt5_connect_all_parse() {
         let input = "10bd0200044d51545405ce003c7c110000007\
