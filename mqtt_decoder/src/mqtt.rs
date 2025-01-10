@@ -1533,8 +1533,47 @@ mod tests {
         }
     }
 
-    // full
-    // 3352000b68656c6c6f2f746f70696300013b0101020000003c03000a746578742f706c61696e08000e726573706f6e73652f746f706963090005313233343526000161000132260001630001337061796c6f6164
+    // full publish test
+    /*
+    MQ Telemetry Transport Protocol, Publish Message
+        Header Flags: 0x33, Message Type: Publish Message, QoS Level: At least once delivery (Acknowledged deliver), Retain
+            0011 .... = Message Type: Publish Message (3)
+            .... 0... = DUP Flag: Not set
+            .... .01. = QoS Level: At least once delivery (Acknowledged deliver) (1)
+            .... ...1 = Retain: Set
+        Msg Len: 82
+        Topic Length: 11
+        Topic: hello/topic
+        Message Identifier: 1
+        Properties
+            Total Length: 59
+            ID: Payload Format Indicator (0x01)
+            Value: 1
+            ID: Publication Expiry Interval (0x02)
+            Value: 60
+            ID: Content Type (0x03)
+            Length: 10
+            Value: text/plain
+            ID: Response Topic (0x08)
+            Length: 14
+            Value: response/topic
+            ID: Correlation Data (0x09)
+            Length: 5
+            Value: 12345
+            ID: User Property (0x26)
+            Key Length: 1
+            Key: a
+            Value Length: 1
+            Value: 2
+            ID: User Property (0x26)
+            Key Length: 1
+            Key: c
+            Value Length: 1
+            Value: 3
+        Message: payload
+
+
+         */
     #[test]
     fn mqtt_publish_full() {
         let input = "3352000b68656c6c6f2f746f70696300013b01010\
