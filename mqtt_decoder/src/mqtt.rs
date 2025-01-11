@@ -1,8 +1,3 @@
-/*
-[TODO]
-- connectのテストを書く
-*/
-
 use bytes::BufMut;
 use thiserror::Error;
 

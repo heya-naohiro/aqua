@@ -8,8 +8,6 @@ members = [
     "mqtt_decoder"
 ]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = { version = "1.0.89", features = ["backtrace", "std"]}
 axum = "0.7.7"
