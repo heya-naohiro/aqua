@@ -96,7 +96,7 @@ where
                     .await
                     .unwrap_or_else(|err| match err {});
 
-                let tower_service = make_service
+                v
                     .call(axum::IncomingStream {
                         tcp_stream: &tcp_stream,
                         remote_addr,

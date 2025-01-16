@@ -1,6 +1,4 @@
 mod aqua;
-mod mqtt;
-mod serve;
 
 async fn handler() -> &'static str {
     "Hello world"

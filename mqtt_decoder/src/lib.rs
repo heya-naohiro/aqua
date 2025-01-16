@@ -7,7 +7,7 @@ use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
  */
-mod mqtt;
+pub mod mqtt;
 /*
 
 //元の(tcp)Streamを受け取ってMQTTStreamに変換する

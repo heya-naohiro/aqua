@@ -38,6 +38,7 @@ dependencies = [
  "hex",
  "hyper",
  "hyper-util",
+ "mqtt_decoder",
  "pin-project",
  "pin-project-lite",
  "thiserror",
