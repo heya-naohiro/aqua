@@ -7,6 +7,7 @@ use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
  */
+pub mod decoder;
 pub mod mqtt;
 /*
 

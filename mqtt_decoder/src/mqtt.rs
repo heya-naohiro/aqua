@@ -9,13 +9,18 @@ pub enum MqttError {
     InvalidFormat,
     #[error("Not Implemented")]
     NotImplemented,
+    #[error("Unexpected")]
+    Unexpected,
 }
 
+#[derive(Default)]
 pub enum ControlPacket {
     CONNECT(Connect),
     DISCONNECT(Disconnect),
     CONNACK(Connack),
     PUBLISH(Publish),
+    #[default]
+    UNDEFINED,
     /*
     PUBACK(Puback),
     PUBREC(Pubrec),

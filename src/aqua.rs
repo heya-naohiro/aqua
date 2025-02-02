@@ -1,5 +1,10 @@
+use futures_util::FutureExt;
 // https://github.com/tokio-rs/axum/blob/e09cc593655de82d01971b55130a83842ac46684/axum/src/serve/mod.rs#L351
 // 参考
+// Listener関連
+// https://github.com/tokio-rs/axum/blob/main/axum/src/serve/listener.rs#L9
+use mqtt_decoder::mqtt::{ControlPacket, MqttPacket};
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{poll_fn, Future, IntoFuture};
 use std::marker::PhantomData;
@@ -7,13 +12,28 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use std::{io, result};
 use tokio::net::{TcpListener, TcpStream};
-
+use tower::ServiceExt;
+use tower_service::Service;
+use tracing::trace;
 mod connection;
+use futures_util::pin_mut;
 
 pub struct Serve<M, S> {
     tcp_listener: TcpListener,
     make_service: M,
     _marker: PhantomData<S>,
+}
+
+pub struct MqttPacketBody {
+    pub mqttpacket: ControlPacket,
+}
+
+impl MqttPacketBody {
+    pub fn new<B>(_body: B) -> Self {
+        Self {
+            mqttpacket: ControlPacket::UNDEFINED,
+        }
+    }
 }
 
 pub fn serve<M, S>(tcp_listener: TcpListener, make_service: M) -> Serve<M, S> {
@@ -42,7 +62,19 @@ where
     }
 }
 
-impl<M, S> IntoFuture for Serve<M, S> {
+impl<M, S> IntoFuture for Serve<M, S>
+where
+    M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>,
+    S: Service<
+            connection::request::Request<connection::request::IncomingStream>,
+            Response = connection::response::Response,
+            Error = Infallible,
+        > + ServiceExt<connection::request::Request<connection::request::IncomingStream>>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send,
+{
     type Output = io::Result<()>;
     type IntoFuture = private::ServeFuture;
 
@@ -64,16 +96,18 @@ impl<M, S> IntoFuture for Serve<M, S> {
                     .unwrap_or_else(|err| match err {});
 
                 let tower_service = make_service
-                    .call(MqttStream {
-                        tcp_stream: &tcp_stream,
-                        remote_addr,
+                    .call(connection::request::IncomingStream {
+                        tcp_stream: tcp_stream,
+                        addr: remote_addr,
                     })
                     .await
-                    .unwrap_or_else(|err| match err {})
-                    .map_request(|req: Request<MqttStream>| req.map(MqttPacket::new));
+                    .unwrap_or_else(|err| match err {});
 
+                pin_mut!(tower_service);
                 tokio::spawn(async move {
-                    let conn = connection::Connection::new(io, hyper_service);
+                    let conn = connection::Connection::new(tower_service, tcp_stream);
+                    pin_mut!(conn);
+
                     // ここまで前処理
                     // ここが実働部
                     loop {
@@ -92,7 +126,7 @@ impl<M, S> IntoFuture for Serve<M, S> {
                         }
                         */
                     }
-                })
+                });
             }
         }))
     }

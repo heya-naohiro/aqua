@@ -1,31 +1,48 @@
+pub mod request;
+pub mod response;
+
+use bytes::{BufMut, BytesMut};
+use futures_util::stream::poll_fn;
+use mqtt_decoder::decoder;
+use mqtt_decoder::mqtt::decoder::decode_fixed_header;
+use mqtt_decoder::mqtt::ControlPacket;
+use mqtt_decoder::mqtt::MqttError;
+use mqtt_decoder::mqtt::MqttPacket;
+use request::Request;
+use response::Response;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_util::io::poll_read_buf;
 use tower::Service;
-mod request;
-mod response;
+
+const BUFFER_CAPACITY: usize = 4096;
 
 pub struct Connection<S, IO> {
     service: S,
     io: IO,
     state: ConnectionState,
+    buffer: BytesMut,
+    decoder: decoder::Decoder,
 }
 
 enum ConnectionState {
     PreConnection,
     ReadingPacket,
-    ProcessingService(Request<MqttPacket>), // Request, Responseはこちらが定義し提供する
-    WritingPacket(Response<MqttPacket>),
+    ProcessingService(Request<request::IncomingMqtt>), // Request, Responseはこちらが定義し提供する
+    WritingPacket(Response),
     Closed,
 }
 
 impl<S, IO> Connection<S, IO>
 where
-    S: Service<Request<MqttPacket>, Response = Response<MqttPacket>> + Unpin,
+    S: Service<Request<request::IncomingMqtt>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
-    S::Future: Unpin,
+    S::Future: 'static,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     pub fn new(service: S, io: IO) -> Self {
@@ -33,26 +50,29 @@ where
             service,
             io,
             state: ConnectionState::PreConnection,
+            buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
+            decoder: decoder::new(),
         }
     }
 }
 
 impl<S, IO> Future for Connection<S, IO>
 where
-    S: Service<Request<MqttPacket>, Response = Response<MqttPacket>> + Unpin,
+    S: Service<Request<request::IncomingMqtt>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    type Output = Result<(), std::error::Error>;
+    type Output = Result<(), Box<dyn std::error::Error>>;
+
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             match self.state {
                 ConnectionState::PreConnection => {
                     let req = match self.read_packet(cx) {
                         Poll::Ready(Ok(req)) => {
-                            if req != MqttPacket::Connect {
-                                return Poll::Ready(Err(e));
+                            if req != ControlPacket::CONNECT {
+                                return Poll::Ready(Err(Box::new(MqttError::Unexpected)));
                             }
                             req
                         }
@@ -69,18 +89,18 @@ where
                         Poll::Pending => return Poll::Pending,
                     };
 
-                    if req == MqttPacket::Close {
+                    if req == ControlPacket::DISCONNECT {
                         self.state = ConnectionState::Closed;
                         // -> DropでClose処理を行う
                         return Poll::Ready(Ok(()));
                     }
-                    self.state = ConnectionState::ProcessingPacket(req);
+                    self.state = ConnectionState::ProcessingService(req);
                 }
-                ConnectionState::ProcessingPacket(ref req) => {
+                ConnectionState::ProcessingService(ref req) => {
                     let p = match Pin::new(&mut self.service).poll_ready(cx) {
                         Poll::Ready(Ok(())) => {
-                            let fut = self.service.call(req.clone()); /* Clone cost ??? */
-                            match Pin::New(&mut fut).poll(cx) {
+                            let fut = self.service.call(*req); /* Clone cost ??? */
+                            match Pin::new(&mut fut).poll(cx) {
                                 Poll::Ready(Ok(res)) => res,
                                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                                 Poll::Pending => return Poll::Pending,
@@ -91,7 +111,7 @@ where
                     };
                     self.state = ConnectionState::WritingPacket(p);
                 }
-                ConnectionState::Writing(ref res) => match self.write_packet(cx, res) {
+                ConnectionState::WritingPacket(ref res) => match self.write_packet(cx, res) {
                     Poll::Ready(Ok(())) => self.state = ConnectionState::ReadingPacket,
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
@@ -101,5 +121,41 @@ where
                 }
             }
         }
+    }
+}
+
+/*
+もっと独立性を高めるべきかと思いますが、早すぎる最適化を防ぐ
+*/
+impl<S, IO> Connection<S, IO>
+where
+    S: Service<Request<request::IncomingMqtt>, Response = Response> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    S::Future: Unpin,
+    IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    fn read_packet(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Request<request::IncomingMqtt>, Box<dyn std::error::Error>>> {
+        let this = self.get_mut();
+        let mut buf = &mut this.buffer;
+        match poll_read_buf(Pin::new(&mut this.io), cx, &mut buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(0)) => {
+                // closed
+                // ?
+                return Poll::Ready(Err("Connection closed".into()));
+            }
+            Poll::Ready(Ok(_n)) => this.decoder.poll_decode(cx, &mut buf),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
+        }
+    }
+    fn write_packet(
+        &self,
+        cx: &mut Context<'_>,
+        res: &Response,
+    ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
+        self.write_mqtt_packet(self.io, cx)
     }
 }

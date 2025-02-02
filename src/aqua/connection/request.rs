@@ -1,6 +1,18 @@
-use mqtt_decoder::mqtt::ControlPacket;
+use std::net::SocketAddr;
 
-pub struct Request {
-    packet: ControlPacket,
-    client_id: usize,
+use mqtt_decoder::mqtt::MqttPacket;
+use tokio::net::TcpStream;
+
+pub struct Request<T> {
+    client_id: String,
+    body: T,
+}
+
+pub struct IncomingStream {
+    pub tcp_stream: TcpStream,
+    pub addr: SocketAddr,
+}
+
+pub struct IncomingMqtt {
+    pub packet: Box<dyn MqttPacket>,
 }
