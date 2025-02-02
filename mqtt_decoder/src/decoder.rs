@@ -10,19 +10,19 @@ enum DecoderState {
     Done,
 }
 
-struct Decoder {
+pub struct Decoder {
     state: DecoderState,
     tmp_packet: ControlPacket,
 }
 
 impl Decoder {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: DecoderState::Done,
             tmp_packet: ControlPacket::UNDEFINED,
         }
     }
-    fn poll_decode(
+    pub fn poll_decode(
         &mut self,
         cx: &mut Context<'_>,
         buf: &mut BytesMut,
