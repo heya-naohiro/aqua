@@ -4,6 +4,7 @@ pub mod response;
 use bytes::{BufMut, BytesMut};
 use futures_util::stream::poll_fn;
 use mqtt_decoder::decoder;
+use mqtt_decoder::mqtt;
 use mqtt_decoder::mqtt::decoder::decode_fixed_header;
 use mqtt_decoder::mqtt::ControlPacket;
 use mqtt_decoder::mqtt::MqttError;
@@ -51,7 +52,7 @@ where
             io,
             state: ConnectionState::PreConnection,
             buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
-            decoder: decoder::new(),
+            decoder: decoder::Decoder::new(),
         }
     }
 }
@@ -124,9 +125,6 @@ where
     }
 }
 
-/*
-もっと独立性を高めるべきかと思いますが、早すぎる最適化を防ぐ
-*/
 impl<S, IO> Connection<S, IO>
 where
     S: Service<Request<request::IncomingMqtt>, Response = Response> + Unpin,
@@ -137,7 +135,7 @@ where
     fn read_packet(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<Request<request::IncomingMqtt>, Box<dyn std::error::Error>>> {
+    ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.get_mut();
         let mut buf = &mut this.buffer;
         match poll_read_buf(Pin::new(&mut this.io), cx, &mut buf) {
@@ -147,7 +145,11 @@ where
                 // ?
                 return Poll::Ready(Err("Connection closed".into()));
             }
-            Poll::Ready(Ok(_n)) => this.decoder.poll_decode(cx, &mut buf),
+            Poll::Ready(Ok(_n)) => match this.decoder.poll_decode(cx, &mut buf) {
+                Poll::Ready(Ok(control_packet)) => Poll::Ready(Ok(Request::new(control_packet))),
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                Poll::Pending => return Poll::Pending,
+            },
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
         }
     }
@@ -156,6 +158,15 @@ where
         cx: &mut Context<'_>,
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        self.write_mqtt_packet(self.io, cx)
+        let mut buf = BytesMut::new();
+
+        // encodeにおいてもControlPacketに共通のメソッドを用意する
+        //res.packet.encode_...(buf, start_pos)
+
+        match Pin::new(&mut self.io).poll_write(cx, &buf) {
+            Poll::Ready(Ok(_)) => self.io.poll_flush(cx).map_err(|e| e.into()),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
