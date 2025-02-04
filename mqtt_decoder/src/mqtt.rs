@@ -1,4 +1,4 @@
-use bytes::BufMut;
+use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -44,6 +44,7 @@ pub trait MqttPacket {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError>;
+    fn encode(&mut self) -> Result<Bytes, MqttError>;
 }
 
 impl MqttPacket for ControlPacket {
@@ -66,6 +67,12 @@ impl MqttPacket for ControlPacket {
         match self {
             ControlPacket::CONNECT(p) => p.decode_variable_header(buf, start_pos),
             ControlPacket::PUBLISH(p) => p.decode_variable_header(buf, start_pos),
+            _ => Err(MqttError::NotImplemented),
+        }
+    }
+    fn encode(&mut self) -> Result<bytes::Bytes, MqttError> {
+        match self {
+            ControlPacket::CONNACK(p) => p.build_bytes(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -132,8 +139,7 @@ pub struct ConnackProperties {
 
 impl ConnackProperties {
     fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
-        let mut buf = bytes::BytesMut::new();
-
+        let mut buf = BytesMut::new();
         if let Some(c) = self.session_expiry_interval {
             buf.extend_from_slice(&[0x11]);
             buf.extend_from_slice(&c.to_be_bytes());
@@ -1122,6 +1128,11 @@ impl MqttPacket for Publish {
     ) -> Result<usize, MqttError> {
         Ok(0)
     }
+    // [TODO]
+    fn encode(&mut self) -> Result<Bytes, MqttError> {
+        let buf = bytes::BytesMut::new();
+        return Ok(buf.freeze());
+    }
 }
 
 impl MqttPacket for Connect {
@@ -1361,6 +1372,10 @@ impl MqttPacket for Connect {
         dbg!("all dne");
 
         return Ok(next_pos);
+    }
+    fn encode(&mut self) -> Result<Bytes, MqttError> {
+        let buf = bytes::BytesMut::new();
+        return Ok(buf.freeze());
     }
 }
 

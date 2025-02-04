@@ -4,6 +4,7 @@ pub mod response;
 use bytes::{BufMut, BytesMut};
 use futures_util::stream::poll_fn;
 use mqtt_decoder::decoder;
+use tokio::io::AsyncWriteExt
 use mqtt_decoder::mqtt;
 use mqtt_decoder::mqtt::decoder::decode_fixed_header;
 use mqtt_decoder::mqtt::ControlPacket;
@@ -158,13 +159,20 @@ where
         cx: &mut Context<'_>,
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        let mut buf = BytesMut::new();
+        //let mut buf = BytesMut::new();
 
         // encodeにおいてもControlPacketに共通のメソッドを用意する
         //res.packet.encode_...(buf, start_pos)
-
+        let buf = match res.packet.encode() {
+            Ok(buf) => buf,
+            Err(e) => {
+                return Poll::Ready(Err(Box::new(e)));
+            }
+        };
         match Pin::new(&mut self.io).poll_write(cx, &buf) {
-            Poll::Ready(Ok(_)) => self.io.poll_flush(cx).map_err(|e| e.into()),
+            Poll::Ready(Ok(n)) => {
+                Poll::Ready(Ok(n))
+            },
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
             Poll::Pending => Poll::Pending,
         }
