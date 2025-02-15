@@ -44,7 +44,9 @@ pub trait MqttPacket {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError>;
-    fn encode(&mut self) -> Result<Bytes, MqttError>;
+    fn encode_fixed_header(&self) -> Result<Bytes, MqttError>;
+    fn encode_variable_header(&self) -> Result<Bytes, MqttError>;
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
 }
 
 impl MqttPacket for ControlPacket {
@@ -70,9 +72,18 @@ impl MqttPacket for ControlPacket {
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn encode(&mut self) -> Result<bytes::Bytes, MqttError> {
+    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
         match self {
-            ControlPacket::CONNACK(p) => p.build_bytes(),
+            _ => Err(MqttError::NotImplemented),
+        }
+    }
+    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
+        match self {
+            _ => Err(MqttError::NotImplemented),
+        }
+    }
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        match self {
             _ => Err(MqttError::NotImplemented),
         }
     }

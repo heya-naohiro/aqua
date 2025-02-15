@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
  */
 pub mod decoder;
+pub mod encoder;
 pub mod mqtt;
 /*
 

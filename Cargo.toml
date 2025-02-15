@@ -5,7 +5,7 @@ edition = "2021"
 
 [workspace]
 members = [
-    "mqtt_decoder"
+    "mqtt_coder"
 ]
 
 [dependencies]
@@ -22,7 +22,7 @@ axum-core = "0.4.3"
 pin-project-lite = "0.2.14"
 bytes = "1.7.2"
 thiserror = "1.0.64"
-mqtt_decoder = {path = "./mqtt_decoder"}
+mqtt_coder = {path = "./mqtt_coder"}
 log = "0.4"
 tracing = "0.1"
 tracing-subscriber = "0.3"

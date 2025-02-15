@@ -3,13 +3,12 @@ pub mod response;
 
 use bytes::{BufMut, BytesMut};
 use futures_util::stream::poll_fn;
+use mqtt_coder::mqtt;
+use mqtt_coder::mqtt::decoder::decode_fixed_header;
+use mqtt_coder::mqtt::ControlPacket;
+use mqtt_coder::mqtt::MqttError;
+use mqtt_coder::mqtt::MqttPacket;
 use mqtt_decoder::decoder;
-use tokio::io::AsyncWriteExt
-use mqtt_decoder::mqtt;
-use mqtt_decoder::mqtt::decoder::decode_fixed_header;
-use mqtt_decoder::mqtt::ControlPacket;
-use mqtt_decoder::mqtt::MqttError;
-use mqtt_decoder::mqtt::MqttPacket;
 use request::Request;
 use response::Response;
 use std::future::Future;
@@ -17,6 +16,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
+use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::io::poll_read_buf;
@@ -30,6 +30,7 @@ pub struct Connection<S, IO> {
     state: ConnectionState,
     buffer: BytesMut,
     decoder: decoder::Decoder,
+    encoder: encoder::Encoder,
 }
 
 enum ConnectionState {
@@ -54,6 +55,7 @@ where
             state: ConnectionState::PreConnection,
             buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
             decoder: decoder::Decoder::new(),
+            encoder: encoder::Encoder::new(),
         }
     }
 }
@@ -91,7 +93,7 @@ where
                         Poll::Pending => return Poll::Pending,
                     };
 
-                    if req == ControlPacket::DISCONNECT {
+                    if req.body == ControlPacket::DISCONNECT {
                         self.state = ConnectionState::Closed;
                         // -> DropでClose処理を行う
                         return Poll::Ready(Ok(()));
@@ -159,22 +161,29 @@ where
         cx: &mut Context<'_>,
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        //let mut buf = BytesMut::new();
+        let this = self.get_mut();
 
-        // encodeにおいてもControlPacketに共通のメソッドを用意する
-        //res.packet.encode_...(buf, start_pos)
-        let buf = match res.packet.encode() {
-            Ok(buf) => buf,
-            Err(e) => {
-                return Poll::Ready(Err(Box::new(e)));
+        this.encoder.reset();
+        loop {
+            match encoder.poll_encode(cx, &res.packet) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    match Pin::new(&mut this.io).poll_write(cx, &chunk) {
+                        Poll::Ready(Ok(n)) => {
+                            if n == 0 {
+                                return Poll::Ready(Err("Connection closed during write".into()));
+                            }
+                        }
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(e)),
+                Poll::Ready(None) => {
+                    this.encoder = None;
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Pending => return Poll::Pending,
             }
-        };
-        match Pin::new(&mut self.io).poll_write(cx, &buf) {
-            Poll::Ready(Ok(n)) => {
-                Poll::Ready(Ok(n))
-            },
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
-            Poll::Pending => Poll::Pending,
         }
     }
 }

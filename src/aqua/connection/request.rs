@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 
 pub struct Request<T> {
     //    client_id: String, [TODO]
-    body: T,
+    pub body: T,
 }
 
 impl<T> Request<T> {
