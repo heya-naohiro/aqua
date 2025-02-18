@@ -1140,9 +1140,14 @@ impl MqttPacket for Publish {
         Ok(0)
     }
     // [TODO]
-    fn encode(&mut self) -> Result<Bytes, MqttError> {
-        let buf = bytes::BytesMut::new();
-        return Ok(buf.freeze());
+    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
     }
 }
 
@@ -1384,9 +1389,14 @@ impl MqttPacket for Connect {
 
         return Ok(next_pos);
     }
-    fn encode(&mut self) -> Result<Bytes, MqttError> {
-        let buf = bytes::BytesMut::new();
-        return Ok(buf.freeze());
+    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
     }
 }
 

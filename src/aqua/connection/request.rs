@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
 
-use mqtt_decoder::mqtt::MqttPacket;
+use mqtt_coder::mqtt::MqttPacket;
 use tokio::net::TcpStream;
 
+#[derive(Clone, Default)]
 pub struct Request<T> {
     //    client_id: String, [TODO]
     pub body: T,
