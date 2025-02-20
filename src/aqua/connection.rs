@@ -40,7 +40,9 @@ where
     encoder: encoder::Encoder,
 }
 
+#[derive(Default)]
 enum ConnectionState<F> {
+    #[default]
     PreConnection,
     ReadingPacket,
     ProcessingService(F),
@@ -77,12 +79,11 @@ where
     type Output = Result<(), Box<dyn std::error::Error>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        let state = std::mem::replace(&mut this.state, ConnectionState::Closed);
-
-        let new_state = match state {
+        let mut this = self.as_mut();
+        let mut new_state = None;
+        match std::mem::take(&mut this.state) {
             ConnectionState::PreConnection => {
-                let _req = match this.read_packet(cx) {
+                let _req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
                         if let ControlPacket::CONNECT(_) = req.body {
                             req
@@ -93,11 +94,11 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
                 };
-                ConnectionState::ReadingPacket
+                new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
-                let req = match Pin::new(&mut *self).read_packet(cx) {
+                let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => req,
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
@@ -106,27 +107,31 @@ where
                     // -> DropでClose処理を行う
                     return Poll::Ready(Ok(()));
                 }
-                let fut = self.service.call(req);
-                ConnectionState::ProcessingService(fut)
+                let fut = this.service.call(req);
+                new_state = Some(ConnectionState::ProcessingService(fut));
             }
-            ConnectionState::ProcessingService(fut) => {
-                let response = match Pin::new(&mut fut).poll(cx) {
+            ConnectionState::ProcessingService(ref mut fut) => {
+                let response = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
-                ConnectionState::WritingPacket(response)
+                new_state = Some(ConnectionState::WritingPacket(response));
             }
-            ConnectionState::WritingPacket(ref res) => match self.write_packet(cx, res) {
-                Poll::Ready(Ok(())) => ConnectionState::ReadingPacket,
+            ConnectionState::WritingPacket(ref res) => match this.as_mut().write_packet(cx, res) {
+                Poll::Ready(Ok(())) => {
+                    new_state = Some(ConnectionState::ReadingPacket);
+                }
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => return Poll::Pending,
             },
             ConnectionState::Closed => {
                 return Poll::Ready(Ok(()));
             }
-        };
-        self.as_mut().state = new_state;
+        }
+        if let Some(state) = new_state {
+            this.state = state;
+        }
         Poll::Pending
     }
 }
@@ -147,8 +152,6 @@ where
         match poll_read_buf(Pin::new(&mut this.io), cx, &mut buf) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(0)) => {
-                // closed
-                // ?
                 return Poll::Ready(Err("Connection closed".into()));
             }
             Poll::Ready(Ok(_n)) => match this.decoder.poll_decode(cx, &mut buf) {
@@ -160,11 +163,11 @@ where
         }
     }
     fn write_packet(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        let this = self.get_mut();
+        let mut this = self.as_mut();
 
         this.encoder.reset();
         loop {
