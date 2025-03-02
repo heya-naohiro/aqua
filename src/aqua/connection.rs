@@ -166,10 +166,11 @@ where
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
         // as_mut() は Pin<&mut Self> のまま再取得する。
         let mut this = self.as_mut();
-        match this
-            .encoder
-            .poll_encode(cx, &res.packet, &mut this.write_buffer)
-        {
+
+        // `encoder` と `write_buffer` への参照を取得
+        let encoder = &mut this.encoder;
+        let write_buffer = &mut this.write_buffer;
+        match encoder.poll_encode(cx, &res.packet, write_buffer) {
             Poll::Ready(Ok(Some(()))) => {
                 while !this.buffer.is_empty() {
                     match Pin::new(&mut this.io).poll_write(cx, &this.write_buffer) {
