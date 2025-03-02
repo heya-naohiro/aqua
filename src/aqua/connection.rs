@@ -8,6 +8,7 @@ use mqtt_coder::encoder;
 use mqtt_coder::mqtt;
 use mqtt_coder::mqtt::ControlPacket;
 use mqtt_coder::mqtt::MqttError;
+use pin_project::pin_project;
 use request::Request;
 use response::Response;
 use std::future::Future;
@@ -17,8 +18,10 @@ use std::task::Poll;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::io::poll_read_buf;
 use tower::Service;
+
 const BUFFER_CAPACITY: usize = 4096;
 
+#[pin_project]
 pub struct Connection<S, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
@@ -26,6 +29,7 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     service: S,
+    #[pin]
     io: IO,
     state: ConnectionState<S::Future>,
     buffer: BytesMut,
@@ -143,9 +147,9 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         // bufferにアクセスするためにPin<&mut Self> から &mut Self を取り出す
-        let this = self.get_mut();
-        let mut buf = &mut this.buffer;
-        match poll_read_buf(Pin::new(&mut this.io), cx, &mut buf) {
+        let this = self.project();
+        let mut buf = &mut *this.buffer;
+        match poll_read_buf(this.io, cx, &mut buf) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed".into()));
@@ -160,12 +164,12 @@ where
     }
     // ここをloopなしにする
     fn write_packet(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
         // as_mut() は Pin<&mut Self> のまま再取得する。
-        let mut this = self.as_mut();
+        let mut this = self.project();
 
         // `encoder` と `write_buffer` への参照を取得
         let encoder = &mut this.encoder;
