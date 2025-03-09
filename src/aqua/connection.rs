@@ -43,7 +43,7 @@ enum ConnectionState<F> {
     #[default]
     PreConnection,
     ReadingPacket,
-    ProcessingService(F),
+    ProcessingService(Pin<Box<F>>),
     WritingPacket(Response),
     Closed,
 }
@@ -106,11 +106,11 @@ where
                     // -> DropでClose処理を行う
                     return Poll::Ready(Ok(()));
                 }
-                let fut = this.service.call(req);
+                let fut = Box::pin((this.service).call(req));
                 new_state = Some(ConnectionState::ProcessingService(fut));
             }
-            ConnectionState::ProcessingService(ref mut fut) => {
-                let response = match Pin::new(fut).poll(cx) {
+            ConnectionState::ProcessingService(mut fut) => {
+                let response = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
@@ -146,7 +146,6 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
-        // bufferにアクセスするためにPin<&mut Self> から &mut Self を取り出す
         let this = self.project();
         let mut buf = &mut *this.buffer;
         match poll_read_buf(this.io, cx, &mut buf) {
@@ -162,7 +161,6 @@ where
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
         }
     }
-    // ここをloopなしにする
     fn write_packet(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -171,9 +169,9 @@ where
         // as_mut() は Pin<&mut Self> のまま再取得する。
         let mut this = self.project();
 
-        // `encoder` と `write_buffer` への参照を取得
         let encoder = &mut this.encoder;
         let write_buffer = &mut this.write_buffer;
+
         match encoder.poll_encode(cx, &res.packet, write_buffer) {
             Poll::Ready(Ok(Some(()))) => {
                 while !this.buffer.is_empty() {

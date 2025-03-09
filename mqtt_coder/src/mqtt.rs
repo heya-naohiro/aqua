@@ -13,7 +13,7 @@ pub enum MqttError {
     Unexpected,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum ControlPacket {
     CONNECT(Connect),
     DISCONNECT(Disconnect),
@@ -89,7 +89,7 @@ impl MqttPacket for ControlPacket {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Connack {
     pub remaining_length: usize,
     pub acknowledge_flag: bool,
@@ -98,7 +98,7 @@ pub struct Connack {
     pub connack_properties: Option<ConnackProperties>,
 }
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub enum ConnackReason {
     /* Success */
     #[default]
@@ -127,7 +127,7 @@ pub enum ConnackReason {
     ConnectionRateExceeded = 0x9F,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ConnackProperties {
     pub session_expiry_interval: Option<u32>,
     pub receive_maximum: Option<u16>,
@@ -1399,7 +1399,7 @@ impl MqttPacket for Connect {
         todo!()
     }
 }
-
+#[derive(Debug)]
 pub struct Disconnect {
     remain_length: usize,
 }

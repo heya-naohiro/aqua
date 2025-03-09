@@ -1,22 +1,21 @@
-use futures_util::FutureExt;
 // https://github.com/tokio-rs/axum/blob/e09cc593655de82d01971b55130a83842ac46684/axum/src/serve/mod.rs#L351
 // 参考
 // Listener関連
 // https://github.com/tokio-rs/axum/blob/main/axum/src/serve/listener.rs#L9
-use mqtt_decoder::mqtt::{ControlPacket, MqttPacket};
+use mqtt_coder::mqtt::ControlPacket;
 use std::convert::Infallible;
 use std::fmt::Debug;
-use std::future::{poll_fn, Future, IntoFuture};
+use std::future::{poll_fn, IntoFuture};
+use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
-use std::{io, result};
 use tokio::net::{TcpListener, TcpStream};
-use tower::ServiceExt;
 use tower_service::Service;
 use tracing::trace;
-mod connection;
-use futures_util::pin_mut;
+
+pub(crate) mod connection;
 
 pub struct Serve<M, S> {
     tcp_listener: TcpListener,
@@ -36,12 +35,32 @@ impl MqttPacketBody {
     }
 }
 
-pub fn serve<M, S>(tcp_listener: TcpListener, make_service: M) -> Serve<M, S> {
-    Serve {
-        tcp_listener,
-        make_service,
-        _marker: PhantomData,
-    }
+pub async fn serve<M, S>(tcp_listener: TcpListener, make_service: M) -> io::Result<()>
+where
+    M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>
+        + Send
+        + 'static,
+    for<'a> <M as Service<connection::request::IncomingStream>>::Future: Send,
+    S: Service<
+            connection::request::Request<ControlPacket>,
+            Response = connection::response::Response,
+        > + Unpin
+        + Clone
+        + Send
+        + 'static,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    S::Future: Send + Unpin,
+{
+    // Serve の IntoFuture 実装を利用して Future を返す
+    Box::pin(
+        Serve {
+            tcp_listener,
+            make_service,
+            _marker: PhantomData,
+        }
+        .into_future(),
+    )
+    .await
 }
 
 impl<M, S> Debug for Serve<M, S>
@@ -64,16 +83,19 @@ where
 
 impl<M, S> IntoFuture for Serve<M, S>
 where
-    M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>,
+    M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>
+        + Send
+        + 'static,
+    for<'a> <M as Service<connection::request::IncomingStream>>::Future: Send,
     S: Service<
-            connection::request::Request<connection::request::IncomingStream>,
+            connection::request::Request<ControlPacket>,
             Response = connection::response::Response,
-            Error = Infallible,
-        > + ServiceExt<connection::request::Request<connection::request::IncomingStream>>
+        > + Unpin
         + Clone
         + Send
         + 'static,
-    S::Future: Send,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    S::Future: Send + Unpin,
 {
     type Output = io::Result<()>;
     type IntoFuture = private::ServeFuture;
@@ -94,25 +116,27 @@ where
                 poll_fn(|cx| make_service.poll_ready(cx))
                     .await
                     .unwrap_or_else(|err| match err {});
+                let arc_tcpstream = Arc::new(tcp_stream);
 
                 let tower_service = make_service
                     .call(connection::request::IncomingStream {
-                        tcp_stream: tcp_stream,
+                        tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
 
-                pin_mut!(tower_service);
                 tokio::spawn(async move {
-                    let conn = connection::Connection::new(tower_service, tcp_stream);
-                    pin_mut!(conn);
+                    let conn = connection::Connection::new(
+                        tower_service,
+                        Arc::<tokio::net::TcpStream>::try_unwrap(arc_tcpstream).unwrap(),
+                    );
 
                     // ここまで前処理
                     // ここが実働部
                     loop {
                         tokio::select! {
-                            result = conn.as_mut() => {
+                            result = conn => {
                                 if let Err(err) = result {
                                     trace!("failed to serve connection: {:?}", err);
                                 }
@@ -161,7 +185,6 @@ mod private {
         pin::Pin,
         task::{Context, Poll},
     };
-
     pub struct ServeFuture(pub(super) futures_util::future::BoxFuture<'static, io::Result<()>>);
 
     impl Future for ServeFuture {
@@ -172,6 +195,7 @@ mod private {
             self.0.as_mut().poll(cx)
         }
     }
+    impl Unpin for ServeFuture {}
 
     impl std::fmt::Debug for ServeFuture {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

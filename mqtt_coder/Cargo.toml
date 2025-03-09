@@ -7,8 +7,6 @@ edition = "2021"
 anyhow = { version = "1.0.89", features = ["backtrace", "std"]}
 axum = "0.7.7"
 futures-util = "0.3.30"
-hyper-util = { version = "0.1.9", features=["full"]}
-hyper = { version = "1.4.1", features=["full"]}
 pin-project = "1.1.5"
 tower = {version = "0.5.1", features=["full"]}
 tower-service = "0.3.2"
@@ -21,7 +19,7 @@ thiserror = "1.0.64"
 hex = "0.4.3"
 async-stream = "0.3.6"
 futures = "0.3.31"
-tokio = { version = "1.40.0", features = ["full"] }
+tokio = { version = "1.38.1", features = ["full"] }
 
 [profile.dev]
 opt-level = 0
