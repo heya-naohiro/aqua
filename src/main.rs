@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower::service_fn;
-mod aqua; // あなたの `serve.rs` モジュール
+mod aqua;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
