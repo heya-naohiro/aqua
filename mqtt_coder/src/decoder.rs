@@ -4,6 +4,7 @@ use bytes::{Buf, BytesMut};
 
 use crate::mqtt::{self, ControlPacket, MqttError, MqttPacket};
 
+#[derive(Debug)]
 enum DecoderState {
     FixedHeaderDecoded,
     VariableHeaderDecoded,
@@ -30,6 +31,10 @@ impl Decoder {
         if buf.is_empty() {
             return Poll::Pending;
         }
+        dbg!("poll_decode");
+        dbg!(&self.state);
+        dbg!(&buf);
+
         match &mut self.state {
             // next ( or first)
             DecoderState::Done => {
@@ -38,6 +43,7 @@ impl Decoder {
                 // [TODO] 後ほどの最適化でString->&strへの変更も 含めて？やる！！
                 match mqtt::decoder::decode_fixed_header(buf, 0) {
                     Ok(result) => {
+                        dbg!("fixed OK");
                         let next_pos;
                         (self.tmp_packet, next_pos) = result;
                         buf.advance(next_pos);
@@ -51,6 +57,7 @@ impl Decoder {
                 }
             }
             DecoderState::FixedHeaderDecoded => {
+                dbg!("FixedHeaderDecoded");
                 // decode variable header
                 match self.tmp_packet.decode_variable_header(buf, 0) {
                     Ok(size) => {

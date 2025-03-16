@@ -22,13 +22,16 @@ use tower::Service;
 const BUFFER_CAPACITY: usize = 4096;
 
 #[pin_project]
-pub struct Connection<S, IO>
+pub struct Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Future: Unpin, // `S::Future` を `Unpin` にする
+    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS::Future: Unpin, // `S::Future` を `Unpin` にする
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     service: S,
+    connect_service: CS,
     #[pin]
     io: IO,
     state: ConnectionState<S::Future>,
@@ -48,16 +51,20 @@ enum ConnectionState<F> {
     Closed,
 }
 
-impl<S, IO> Connection<S, IO>
+impl<S, CS, IO> Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin + 'static,
+    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS::Error: std::error::Error + Send + Sync + 'static,
+    CS::Future: Unpin + 'static,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    pub fn new(service: S, io: IO) -> Self {
+    pub fn new(service: S, connect_service: CS, io: IO) -> Self {
         Connection {
             service,
+            connect_service,
             io,
             state: ConnectionState::PreConnection,
             buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
@@ -68,11 +75,14 @@ where
     }
 }
 
-impl<S, IO> Future for Connection<S, IO>
+impl<S, CS, IO> Future for Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
+    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS::Error: std::error::Error + Send + Sync + 'static,
+    CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     type Output = Result<(), Box<dyn std::error::Error>>;
@@ -81,8 +91,10 @@ where
         let mut this = self.as_mut();
         let new_state;
         match std::mem::take(&mut this.state) {
+            // ここはConnectパケットを受け経ったかどうかのみ：接続管理
             ConnectionState::PreConnection => {
-                let _req = match this.as_mut().read_packet(cx) {
+                dbg!("preConnection");
+                let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
                         if let ControlPacket::CONNECT(_) = req.body {
                             req
@@ -91,14 +103,31 @@ where
                         }
                     }
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Pending => return Poll::Pending, /* Pendingで終わるため、new_stateが変わらない */
+                };
+                /* Connect Service */
+                let mut connect_fut = Box::pin((this.connect_service).call(req));
+                /* [TODO] impl Connect QoS */
+                let res = match connect_fut.as_mut().poll(cx) {
+                    Poll::Ready(Ok(res)) => res, // Response を取得
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
+                    Poll::Pending => return Poll::Pending,
+                };
+                match this.as_mut().write_packet(cx, &res) {
+                    Poll::Ready(Ok(())) => {}
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
                 };
                 new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
+                dbg!("ReadingPacket");
                 let req = match this.as_mut().read_packet(cx) {
-                    Poll::Ready(Ok(req)) => req,
+                    Poll::Ready(Ok(req)) => {
+                        dbg!("request OK!!");
+                        req
+                    }
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
                 };
@@ -135,11 +164,14 @@ where
     }
 }
 
-impl<S, IO> Connection<S, IO>
+impl<S, CS, IO> Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
+    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS::Error: std::error::Error + Send + Sync + 'static,
+    CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     fn read_packet(
@@ -148,15 +180,33 @@ where
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
         let mut buf = &mut *this.buffer;
+        dbg!(&buf);
         match poll_read_buf(this.io, cx, &mut buf) {
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                if buf.is_empty() {
+                    return Poll::Pending;
+                }
+                // bufferにデータが存在する場合はdecodeを試みる
+                match this.decoder.poll_decode(cx, &mut buf) {
+                    Poll::Ready(Ok(control_packet)) => {
+                        Poll::Ready(Ok(Request::new(control_packet)))
+                    }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                }
+            }
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed".into()));
             }
             Poll::Ready(Ok(_n)) => match this.decoder.poll_decode(cx, &mut buf) {
                 Poll::Ready(Ok(control_packet)) => Poll::Ready(Ok(Request::new(control_packet))),
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    dbg!("pending2");
+                    return Poll::Pending;
+                }
             },
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
         }
@@ -174,8 +224,8 @@ where
 
         match encoder.poll_encode(cx, &res.packet, write_buffer) {
             Poll::Ready(Ok(Some(()))) => {
-                while !this.buffer.is_empty() {
-                    match Pin::new(&mut this.io).poll_write(cx, &this.write_buffer) {
+                while !write_buffer.is_empty() {
+                    match Pin::new(&mut this.io).poll_write(cx, write_buffer) {
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
                                 return Poll::Ready(Err("Connection closed during write".into()));

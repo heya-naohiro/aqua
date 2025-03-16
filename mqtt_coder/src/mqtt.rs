@@ -947,8 +947,7 @@ pub fn decode_utf8_string(
     start_pos: usize,
 ) -> Result<(String, usize), MqttError> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
-    println!("length: {}", length);
-
+    dbg!(length); //??
     if start_pos + 2 + length > buf.len() {
         return Err(MqttError::InsufficientBytes.into());
     }
@@ -1004,9 +1003,7 @@ impl ClientId {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
-        dbg!(buf[start_pos]);
         let (res, pos) = decode_utf8_string(buf, start_pos)?;
-        dbg!(&res);
         /*
         if !res.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(MqttError::InvalidFormat);
@@ -1158,15 +1155,36 @@ impl MqttPacket for Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
+        dbg!(start_pos);
         let (result, mut next_pos) = ProtocolName::try_from(buf, start_pos)?;
         self.protocol_name = result;
+        dbg!(next_pos);
         (self.protocol_ver, next_pos) = ProtocolVersion::try_from(buf, next_pos)?;
+        dbg!(next_pos);
         (self.connect_flags, next_pos) = ConnectFlags::try_from(buf, next_pos)?;
+        dbg!("keep alilve");
+        dbg!(next_pos);
         (self.keepalive, next_pos) = KeepAlive::try_from(buf, next_pos)?;
+        dbg!(next_pos);
         let property_length;
-        dbg!(format!("0x{:x}", buf[next_pos]));
+        dbg!(format!("0x{:02x}", buf[next_pos]));
+        dbg!(format!("0x{:02x}", buf[next_pos + 1]));
+        dbg!(format!("0x{:02x}", buf[next_pos + 2]));
+
+        dbg!(next_pos);
+        // MQTT version5
+        if self.protocol_ver.into_inner() != 0b00000101 {
+            return Ok(next_pos);
+        }
         (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+        dbg!("property length ");
+        dbg!(property_length);
+        dbg!(next_pos);
+        dbg!(format!("0x{:02x}", buf[next_pos]));
+        dbg!(format!("0x{:02x}", buf[next_pos + 1]));
+
         let end_pos = next_pos + property_length;
+
         loop {
             dbg!(next_pos, end_pos);
             if next_pos == end_pos {
@@ -1265,6 +1283,8 @@ impl MqttPacket for Connect {
                 return Err(MqttError::InvalidFormat);
             }
         }
+        dbg!(&buf[next_pos]);
+        dbg!(self);
         return Ok(next_pos);
     }
 
@@ -1277,6 +1297,7 @@ impl MqttPacket for Connect {
         let mut next_pos;
         dbg!("decode_payload");
         dbg!(start_pos);
+        dbg!(buf);
         (self.client_id, next_pos) = ClientId::try_from(buf, start_pos)?;
         dbg!(&self.client_id);
         if self.connect_flags.will_flag {
