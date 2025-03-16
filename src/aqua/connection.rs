@@ -26,7 +26,7 @@ pub struct Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Future: Unpin, // `S::Future` を `Unpin` にする
-    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
     CS::Future: Unpin, // `S::Future` を `Unpin` にする
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -56,7 +56,7 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin + 'static,
-    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
     CS::Error: std::error::Error + Send + Sync + 'static,
     CS::Future: Unpin + 'static,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -80,7 +80,7 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
-    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
     CS::Error: std::error::Error + Send + Sync + 'static,
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -107,17 +107,16 @@ where
                 };
                 /* Connect Service */
                 let mut connect_fut = Box::pin((this.connect_service).call(req));
-                /* [TODO] impl Connect QoS */
                 let res = match connect_fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
-                match this.as_mut().write_packet(cx, &res) {
-                    Poll::Ready(Ok(())) => {}
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                    Poll::Pending => return Poll::Pending,
-                };
+                if res == true {
+                    // Connack
+                } else {
+                    // Disconnect
+                }
                 new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
@@ -169,7 +168,7 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
-    CS: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
     CS::Error: std::error::Error + Send + Sync + 'static,
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
