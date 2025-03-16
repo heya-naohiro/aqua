@@ -106,6 +106,7 @@ where
                     Poll::Pending => return Poll::Pending, /* Pendingで終わるため、new_stateが変わらない */
                 };
                 /* Connect Service */
+                /* [TODO] ErrorコードやPropertyを返信できるようにtrue/falseではないようにする */
                 let mut connect_fut = Box::pin((this.connect_service).call(req));
                 let res = match connect_fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得

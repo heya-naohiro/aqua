@@ -16,3 +16,12 @@ impl Response {
         };
     }
 }
+
+/* Connack Response
+#[derive(Default)]
+pub struct ConnackResponse {
+    pub packet: ControlPacket,
+    client_id: Uuid,
+}
+
+*/
