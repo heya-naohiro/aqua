@@ -1,3 +1,4 @@
+pub mod connack_response;
 pub mod request;
 pub mod response;
 
@@ -26,7 +27,11 @@ pub struct Connection<S, CS, IO>
 where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Future: Unpin, // `S::Future` を `Unpin` にする
-    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
+    CS: Service<
+            Request<ControlPacket>,
+            Response = connack_response::ConnackResponse,
+            Error = connack_response::ConnackError,
+        > + Unpin,
     CS::Future: Unpin, // `S::Future` を `Unpin` にする
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -56,7 +61,11 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin + 'static,
-    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
+    CS: Service<
+            Request<ControlPacket>,
+            Response = connack_response::ConnackResponse,
+            Error = connack_response::ConnackError,
+        > + Unpin,
     CS::Error: std::error::Error + Send + Sync + 'static,
     CS::Future: Unpin + 'static,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -80,7 +89,11 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
-    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
+    CS: Service<
+            Request<ControlPacket>,
+            Response = connack_response::ConnackResponse,
+            Error = connack_response::ConnackError,
+        > + Unpin,
     CS::Error: std::error::Error + Send + Sync + 'static,
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -113,11 +126,13 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
+                /*
                 if res == true {
                     // Connack
                 } else {
                     // Disconnect
                 }
+                */
                 new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
@@ -169,8 +184,11 @@ where
     S: Service<Request<ControlPacket>, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
-    CS: Service<Request<ControlPacket>, Response = bool> + Unpin,
-    CS::Error: std::error::Error + Send + Sync + 'static,
+    CS: Service<
+            Request<ControlPacket>,
+            Response = connack_response::ConnackResponse,
+            Error = connack_response::ConnackError,
+        > + Unpin,
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {

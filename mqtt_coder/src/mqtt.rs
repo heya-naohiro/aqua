@@ -1,3 +1,5 @@
+use std::fmt;
+
 use bytes::{BufMut, Bytes, BytesMut};
 use thiserror::Error;
 
@@ -98,7 +100,8 @@ pub struct Connack {
     pub connack_properties: Option<ConnackProperties>,
 }
 
-#[derive(Default, Copy, Clone, Debug)]
+#[derive(Default, Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
 pub enum ConnackReason {
     /* Success */
     #[default]
@@ -116,6 +119,9 @@ pub enum ConnackReason {
     ServerBusy = 0x89,
     Banned = 0x8A,
     BadAuthenticationMethod = 0x8C,
+    KeepAliveTimeout = 0x8D,
+    SessionTakenOver = 0x8E,
+    TopicFilterInvalid = 0x8F,
     TopicNameInvalid = 0x90,
     PacketTooLarge = 0x95,
     QuotaExceeded = 0x97,
@@ -125,6 +131,40 @@ pub enum ConnackReason {
     UseAnotherServer = 0x9C,
     ServerMoved = 0x9D,
     ConnectionRateExceeded = 0x9F,
+}
+
+impl ConnackReason {
+    /// 数値から `ConnackReasonCode` へ変換
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x00 => Some(Self::Success),
+            0x80 => Some(Self::UnspecifiedError),
+            0x81 => Some(Self::MalformedPacket),
+            0x82 => Some(Self::ProtocolError),
+            0x83 => Some(Self::ImplementationSpecificError),
+            0x84 => Some(Self::UnsupportedProtocolVersion),
+            0x85 => Some(Self::ClientIdentifierNotValid),
+            0x86 => Some(Self::BadUserNameOrPassword),
+            0x87 => Some(Self::NotAuthorized),
+            0x88 => Some(Self::ServerUnavailable),
+            0x89 => Some(Self::ServerBusy),
+            0x8A => Some(Self::Banned),
+            0x8C => Some(Self::BadAuthenticationMethod),
+            0x8D => Some(Self::KeepAliveTimeout),
+            0x8E => Some(Self::SessionTakenOver),
+            0x8F => Some(Self::TopicFilterInvalid),
+            0x90 => Some(Self::TopicNameInvalid),
+            0x95 => Some(Self::PacketTooLarge),
+            0x97 => Some(Self::QuotaExceeded),
+            0x99 => Some(Self::PayloadFormatInvalid),
+            0x9A => Some(Self::RetainNotSupported),
+            0x9B => Some(Self::QoSNotSupported),
+            0x9C => Some(Self::UseAnotherServer),
+            0x9D => Some(Self::ServerMoved),
+            0x9F => Some(Self::ConnectionRateExceeded),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
