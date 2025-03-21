@@ -94,7 +94,6 @@ impl MqttPacket for ControlPacket {
 #[derive(Default, Debug)]
 pub struct Connack {
     pub remaining_length: usize,
-    pub acknowledge_flag: bool,
     pub session_present: bool,
     pub connect_reason: ConnackReason,
     pub connack_properties: Option<ConnackProperties>,
@@ -276,7 +275,7 @@ impl ConnackProperties {
 }
 
 impl Connack {
-    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+    pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
         let mut properties_len = 0;
         let mut properties_bytes = bytes::Bytes::new();
         if let Some(connack_properties) = &mut self.connack_properties {
@@ -1861,7 +1860,6 @@ mod tests {
         let expected: &[u8] = &[0x20, 0x03, 0x00, 0x00, 0x00];
         let mut connack = Connack {
             remaining_length: 0,
-            acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::Success,
             connack_properties: None,
@@ -1881,7 +1879,6 @@ mod tests {
         let expected: &[u8] = &[0x20, 0x03, 0x00, 0x87, 0x00];
         let mut connack = Connack {
             remaining_length: 0,
-            acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::NotAuthorized,
             connack_properties: None,
@@ -1911,7 +1908,6 @@ mod tests {
         p.maximum_packet_size = Some(10);
         let mut connack = Connack {
             remaining_length: 0,
-            acknowledge_flag: false,
             session_present: false,
             connect_reason: ConnackReason::Success,
             connack_properties: Some(p),

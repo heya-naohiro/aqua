@@ -7,6 +7,17 @@ pub struct ConnackResponse {
     pub connack_properties: Option<mqtt::ConnackProperties>,
 }
 
+impl ConnackResponse {
+    pub fn to_connack(self) -> mqtt::Connack {
+        mqtt::Connack {
+            remaining_length: 0,
+            session_present: self.session_present,
+            connect_reason: mqtt::ConnackReason::Success,
+            connack_properties: self.connack_properties.map(|prop| prop.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConnackError {
     pub reason_code: mqtt::ConnackReason,

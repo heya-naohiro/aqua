@@ -39,7 +39,7 @@ where
     connect_service: CS,
     #[pin]
     io: IO,
-    state: ConnectionState<S::Future>,
+    state: ConnectionState<S::Future, CS::Future>,
     buffer: BytesMut,
     write_buffer: BytesMut,
     decoder: decoder::Decoder,
@@ -47,9 +47,11 @@ where
 }
 
 #[derive(Default)]
-enum ConnectionState<F> {
+enum ConnectionState<F, CF> {
     #[default]
     PreConnection,
+    ProcessingConnect(Pin<Box<CF>>),
+    ResponseConnect(connack_response::ConnackResponse),
     ReadingPacket,
     ProcessingService(Pin<Box<F>>),
     WritingPacket(Response),
@@ -102,7 +104,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
-        let new_state;
+        let mut new_state = Some(ConnectionState::PreConnection);
         match std::mem::take(&mut this.state) {
             // ここはConnectパケットを受け経ったかどうかのみ：接続管理
             ConnectionState::PreConnection => {
@@ -118,22 +120,23 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending, /* Pendingで終わるため、new_stateが変わらない */
                 };
-                /* Connect Service */
-                /* [TODO] ErrorコードやPropertyを返信できるようにtrue/falseではないようにする */
-                let mut connect_fut = Box::pin((this.connect_service).call(req));
-                let res = match connect_fut.as_mut().poll(cx) {
+                let fut = Box::pin((this.connect_service).call(req));
+                new_state = Some(ConnectionState::ProcessingConnect(fut));
+            }
+            ConnectionState::ProcessingConnect(mut fut) => {
+                let connect_service_result = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
-                /*
-                if res == true {
-                    // Connack
-                } else {
-                    // Disconnect
+                new_state = Some(ConnectionState::ResponseConnect(connect_service_result));
+            }
+            ConnectionState::ResponseConnect(res) => {
+                match this.as_mut().write_connack(cx, res) {
+                    Poll::Ready(Ok(_)) => (), // Response を取得
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
+                    Poll::Pending => return Poll::Pending,
                 }
-                */
-                new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
@@ -192,6 +195,20 @@ where
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    fn write_connack(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        response: connack_response::ConnackResponse,
+    ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
+        // [TODO]詰め替えの抑制？
+        let mut connack = response.to_connack();
+        match connack.build_bytes() {
+            Ok(_) => (),
+            Err(err) => return Poll::Ready(Err(err.into())),
+        }
+        let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+        return self.write_packet(cx, &res);
+    }
     fn read_packet(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,

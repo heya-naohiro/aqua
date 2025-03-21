@@ -9,7 +9,7 @@ pub struct Response {
 
 impl Response {
     pub fn new(packet: ControlPacket) -> Self {
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v4(); //???
         return Self {
             packet,
             client_id: id,
