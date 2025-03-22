@@ -17,10 +17,12 @@ use tracing::trace;
 
 pub(crate) mod connection;
 
-pub struct Serve<M, S> {
+pub struct Serve<M, MC, S, SC> {
     tcp_listener: TcpListener,
     make_service: M,
+    make_connect_service: MC,
     _marker: PhantomData<S>,
+    _marker2: PhantomData<SC>,
 }
 
 pub struct MqttPacketBody {
@@ -35,7 +37,11 @@ impl MqttPacketBody {
     }
 }
 
-pub async fn serve<M, S>(tcp_listener: TcpListener, make_service: M) -> io::Result<()>
+pub async fn serve<M, MC, S, SC>(
+    tcp_listener: TcpListener,
+    make_service: M,
+    make_connect_service: MC,
+) -> io::Result<()>
 where
     M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>
         + Send
@@ -50,20 +56,36 @@ where
         + 'static,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Send + Unpin,
+    MC: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = SC>
+        + Send
+        + 'static,
+    for<'a> <MC as Service<connection::request::IncomingStream>>::Future: Send,
+    SC: Service<
+            connection::request::Request<ControlPacket>,
+            Response = connection::connack_response::ConnackResponse,
+            Error = connection::connack_response::ConnackError,
+        > + Unpin
+        + Clone
+        + Send
+        + 'static,
+    SC::Error: std::error::Error + Send + Sync + 'static,
+    SC::Future: Send + Unpin,
 {
     // Serve の IntoFuture 実装を利用して Future を返す
     Box::pin(
         Serve {
             tcp_listener,
             make_service,
+            make_connect_service,
             _marker: PhantomData,
+            _marker2: PhantomData,
         }
         .into_future(),
     )
     .await
 }
 
-impl<M, S> Debug for Serve<M, S>
+impl<M, MC, S, SC> Debug for Serve<M, MC, S, SC>
 where
     M: Debug,
 {
@@ -71,7 +93,9 @@ where
         let Self {
             tcp_listener,
             make_service,
+            make_connect_service,
             _marker: _,
+            _marker2: _,
         } = self;
 
         f.debug_struct("Serve")
@@ -81,7 +105,7 @@ where
     }
 }
 
-impl<M, S> IntoFuture for Serve<M, S>
+impl<M, MC, S, SC> IntoFuture for Serve<M, MC, S, SC>
 where
     M: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = S>
         + Send
@@ -96,6 +120,20 @@ where
         + 'static,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Send + Unpin,
+    MC: for<'a> Service<connection::request::IncomingStream, Error = Infallible, Response = SC>
+        + Send
+        + 'static,
+    for<'a> <MC as Service<connection::request::IncomingStream>>::Future: Send,
+    SC: Service<
+            connection::request::Request<ControlPacket>,
+            Response = connection::connack_response::ConnackResponse,
+            Error = connection::connack_response::ConnackError,
+        > + Unpin
+        + Clone
+        + Send
+        + 'static,
+    SC::Error: std::error::Error + Send + Sync + 'static,
+    SC::Future: Send + Unpin,
 {
     type Output = io::Result<()>;
     type IntoFuture = private::ServeFuture;
@@ -105,7 +143,9 @@ where
             let Self {
                 tcp_listener,
                 mut make_service,
+                mut make_connect_service,
                 _marker: _,
+                _marker2: _,
             } = self;
 
             loop {
@@ -126,9 +166,17 @@ where
                     .await
                     .unwrap_or_else(|err| match err {});
 
+                let tower_connect_service = make_connect_service
+                    .call(connection::request::IncomingStream {
+                        tcp_stream: arc_tcpstream.clone(),
+                        addr: remote_addr,
+                    })
+                    .await
+                    .unwrap_or_else(|err| match err {});
                 tokio::spawn(async move {
                     let conn = connection::Connection::new(
                         tower_service,
+                        tower_connect_service,
                         Arc::<tokio::net::TcpStream>::try_unwrap(arc_tcpstream).unwrap(),
                     );
 
