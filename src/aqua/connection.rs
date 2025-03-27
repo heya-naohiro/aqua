@@ -124,14 +124,18 @@ where
                 new_state = Some(ConnectionState::ProcessingConnect(fut));
             }
             ConnectionState::ProcessingConnect(mut fut) => {
+                dbg!("processingConnaect");
                 let connect_service_result = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
+                dbg!("processingConnaect, new_state");
+
                 new_state = Some(ConnectionState::ResponseConnect(connect_service_result));
             }
             ConnectionState::ResponseConnect(res) => {
+                dbg!("responseConnect");
                 match this.as_mut().write_connack(cx, res) {
                     Poll::Ready(Ok(_)) => (), // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
@@ -178,6 +182,8 @@ where
         if let Some(state) = new_state {
             this.state = state;
         }
+        dbg!("plz, poll again");
+        cx.waker().wake_by_ref();
         Poll::Pending
     }
 }
@@ -207,6 +213,7 @@ where
             Err(err) => return Poll::Ready(Err(err.into())),
         }
         let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+        dbg!("write packet will");
         return self.write_packet(cx, &res);
     }
     fn read_packet(

@@ -39,6 +39,7 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                                 ControlPacket::CONNACK(Default::default())
                             {
                                 let connack_response = ConnackResponse::from(connack_data);
+                                dbg!("(connect) Connack response, ", &connack_response);
                                 Ok(connack_response)
                             } else {
                                 // エラー発生時は ConnackError を返す

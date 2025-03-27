@@ -2,7 +2,7 @@ use mqtt_coder::mqtt;
 use std::convert::From;
 use std::fmt;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ConnackResponse {
     pub session_present: bool,
     pub connack_properties: Option<mqtt::ConnackProperties>,
