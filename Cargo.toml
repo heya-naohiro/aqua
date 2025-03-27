@@ -26,8 +26,14 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 tokio-util = { version = "0.7.13", features=["io"]}
 uuid = { version = "1.7", features = ["v4"] }
+mini-redis = "0.4"
 
 [dev-dependencies]
 hex = "0.4.3"
 tokio = { version = "1", features = ["full"] }
 paho-mqtt = "0.13.1"
+aqua = { path = "." }
+
+[lib]
+name = "aqua"
+path = "src/lib.rs"

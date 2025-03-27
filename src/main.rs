@@ -4,10 +4,12 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower::service_fn;
 mod aqua;
+use mini_redis::{client, Result};
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<()> {
     // TCP リスナーを作成
+    /*
     let addr = "127.0.0.1:1883".parse::<SocketAddr>().unwrap();
     let listener = TcpListener::bind(addr).await?;
 
@@ -40,4 +42,16 @@ async fn main() -> std::io::Result<()> {
 
     // `serve` を使ってサーバーを起動
     aqua::serve(listener, make_service).await
+    */
+    let mut client = client::connect("127.0.0.1:6379").await?;
+
+    // Set the key "hello" with value "world"
+    client.set("hello", "world".into()).await?;
+
+    // Get key "hello"
+    let result = client.get("hello").await?;
+
+    println!("got value from the server; result={:?}", result);
+
+    Ok(())
 }
