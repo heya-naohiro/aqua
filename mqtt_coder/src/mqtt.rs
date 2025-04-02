@@ -84,6 +84,7 @@ impl MqttPacket for ControlPacket {
 
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         match self {
+            ControlPacket::CONNACK(p) => p.encode_payload_chunk(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -187,7 +188,7 @@ pub struct ConnackProperties {
 }
 
 impl ConnackProperties {
-    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+    fn build_bytes(&self) -> std::result::Result<bytes::Bytes, MqttError> {
         let mut buf = BytesMut::new();
         if let Some(c) = self.session_expiry_interval {
             buf.extend_from_slice(&[0x11]);
@@ -275,19 +276,19 @@ impl ConnackProperties {
 
 impl Connack {
     fn encode_header(&self) -> Result<Bytes, MqttError> {
-        todo!()
+        self.build_bytes()
     }
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
-        todo!()
+        Ok(None)
     }
-    pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+    pub fn build_bytes(&self) -> std::result::Result<bytes::Bytes, MqttError> {
         dbg!(&self);
         let mut buf;
         let mut encoded_properties_len: Option<Vec<u8>> = None;
         let mut properties_bytes: Option<bytes::Bytes> = None;
         let mut prop_len = 0;
         if self.version == ProtocolVersion(0x05) {
-            if let Some(connack_properties) = &mut self.connack_properties {
+            if let Some(connack_properties) = &self.connack_properties {
                 let prop_bytes = connack_properties.build_bytes()?;
                 prop_len = prop_bytes.len();
                 let encoded_len = encode_variable_bytes(prop_len);
