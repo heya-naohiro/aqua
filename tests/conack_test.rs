@@ -1,7 +1,7 @@
 use aqua::Connection;
 use aqua::{request, response};
 use aqua::{ConnackError, ConnackResponse};
-use mqtt_coder::mqtt::{self, ControlPacket};
+use mqtt_coder::mqtt::{self, Connack, ControlPacket, ProtocolVersion};
 use paho_mqtt;
 use std::convert::Infallible;
 use std::{net::SocketAddr, time::Duration};
@@ -11,6 +11,8 @@ use tower::service_fn;
 
 #[tokio::test]
 async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
     dbg!("Hello, async_test world");
@@ -36,7 +38,13 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                         ControlPacket::CONNECT(connect_data) => {
                             // CONNECT パケットを受け取ったとき
                             if let ControlPacket::CONNACK(connack_data) =
-                                ControlPacket::CONNACK(Default::default())
+                                ControlPacket::CONNACK(Connack {
+                                    remaining_length: 0,
+                                    session_present: false,
+                                    connect_reason: mqtt::ConnackReason::Success,
+                                    connack_properties: None,
+                                    version: ProtocolVersion::new(0x04),
+                                })
                             {
                                 let connack_response = ConnackResponse::from(connack_data);
                                 dbg!("(connect) Connack response, ", &connack_response);
@@ -87,7 +95,7 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     {
         let create_ops = paho_mqtt::CreateOptionsBuilder::new()
-            .server_uri(str_addr)
+            .server_uri("tcp://".to_owned() + str_addr)
             .client_id("test-client-paho")
             .finalize();
         let client = paho_mqtt::AsyncClient::new(create_ops).unwrap();
@@ -97,7 +105,12 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
             .finalize();
         println!("Connecting to MQTT broker...");
 
-        client.connect(conn_opts).await?;
+        let ret = client.connect(conn_opts).await;
+        if let Err(e) = ret {
+            dbg!(e);
+        } else {
+            println!("Success!!");
+        }
 
         tokio::time::sleep(Duration::from_secs(10)).await;
         //client.disconnect().await.unwrap();

@@ -4,6 +4,7 @@ pub mod response;
 
 use bytes::Buf;
 use bytes::BytesMut;
+use hex::encode;
 use mqtt_coder::decoder;
 use mqtt_coder::encoder;
 use mqtt_coder::mqtt;
@@ -213,7 +214,7 @@ where
             Err(err) => return Poll::Ready(Err(err.into())),
         }
         let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
-        dbg!("write packet will");
+        dbg!("write packet will", &res);
         return self.write_packet(cx, &res);
     }
     fn read_packet(
@@ -259,24 +260,29 @@ where
         res: &Response,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
         // as_mut() は Pin<&mut Self> のまま再取得する。
+        dbg!("Write packet!!!!!!!!");
         let mut this = self.project();
 
         let encoder = &mut this.encoder;
         let write_buffer = &mut this.write_buffer;
-
         match encoder.poll_encode(cx, &res.packet, write_buffer) {
             Poll::Ready(Ok(Some(()))) => {
+                dbg!("poll encode!");
                 while !write_buffer.is_empty() {
-                    match Pin::new(&mut this.io).poll_write(cx, write_buffer) {
-                        Poll::Ready(Ok(n)) => {
-                            if n == 0 {
-                                return Poll::Ready(Err("Connection closed during write".into()));
-                            }
-                            this.buffer.advance(n); // 書き込んだ分をバッファから削除
+                    let n = {
+                        let buf = &mut *write_buffer;
+                        match Pin::new(&mut this.io).poll_write(cx, buf) {
+                            Poll::Ready(Ok(n)) => n,
+                            Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                            Poll::Pending => return Poll::Pending,
                         }
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
-                        Poll::Pending => return Poll::Pending,
+                    };
+                    if n == 0 {
+                        return Poll::Ready(Err("Connection closed during write".into()));
                     }
+                    dbg!(&write_buffer);
+                    dbg!("advance!!", n);
+                    write_buffer.advance(n);
                 }
                 //まだ続く、Encode起因のPending
                 cx.waker().wake_by_ref();

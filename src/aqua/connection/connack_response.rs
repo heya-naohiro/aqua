@@ -1,10 +1,11 @@
-use mqtt_coder::mqtt;
+use mqtt_coder::mqtt::{self, ProtocolVersion};
 use std::convert::From;
 use std::fmt;
 
 #[derive(Default, Debug)]
 pub struct ConnackResponse {
     pub session_present: bool,
+    pub version: ProtocolVersion,
     pub connack_properties: Option<mqtt::ConnackProperties>,
 }
 
@@ -15,6 +16,7 @@ impl ConnackResponse {
             session_present: self.session_present,
             connect_reason: mqtt::ConnackReason::Success,
             connack_properties: self.connack_properties.map(|prop| prop.into()),
+            version: self.version,
         }
     }
 }
@@ -22,6 +24,7 @@ impl ConnackResponse {
 impl From<mqtt::Connack> for ConnackResponse {
     fn from(item: mqtt::Connack) -> Self {
         ConnackResponse {
+            version: item.version,
             session_present: item.session_present,
             connack_properties: item.connack_properties.map(|prop| prop.into()),
         }

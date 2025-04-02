@@ -1,7 +1,7 @@
 use mqtt_coder::mqtt::ControlPacket;
 use uuid::Uuid;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Response {
     pub packet: ControlPacket,
     client_id: Uuid,

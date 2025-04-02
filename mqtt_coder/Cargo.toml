@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+hex = "0.4"
 anyhow = { version = "1.0.89", features = ["backtrace", "std"]}
 axum = "0.7.7"
 futures-util = "0.3.30"

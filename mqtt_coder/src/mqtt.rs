@@ -1,8 +1,10 @@
 use std::fmt;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use hex::encode;
 use thiserror::Error;
 
+use crate::mqtt;
 #[derive(Debug, Error)]
 pub enum MqttError {
     #[error("Insufficient Bytes")]
@@ -46,8 +48,7 @@ pub trait MqttPacket {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError>;
-    fn encode_fixed_header(&self) -> Result<Bytes, MqttError>;
-    fn encode_variable_header(&self) -> Result<Bytes, MqttError>;
+    fn encode_header(&self) -> Result<Bytes, MqttError>;
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
 }
 
@@ -74,16 +75,13 @@ impl MqttPacket for ControlPacket {
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         match self {
+            ControlPacket::CONNACK(p) => p.encode_header(),
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
-        match self {
-            _ => Err(MqttError::NotImplemented),
-        }
-    }
+
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         match self {
             _ => Err(MqttError::NotImplemented),
@@ -97,6 +95,7 @@ pub struct Connack {
     pub session_present: bool,
     pub connect_reason: ConnackReason,
     pub connack_properties: Option<ConnackProperties>,
+    pub version: ProtocolVersion,
 }
 
 #[derive(Default, Copy, Clone, Debug, PartialEq)]
@@ -275,23 +274,48 @@ impl ConnackProperties {
 }
 
 impl Connack {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
+    }
     pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
-        let mut properties_len = 0;
-        let mut properties_bytes = bytes::Bytes::new();
-        if let Some(connack_properties) = &mut self.connack_properties {
-            properties_bytes = connack_properties.build_bytes()?;
-            properties_len = properties_bytes.len();
+        dbg!(&self);
+        let mut buf;
+        let mut encoded_properties_len: Option<Vec<u8>> = None;
+        let mut properties_bytes: Option<bytes::Bytes> = None;
+        let mut prop_len = 0;
+        if self.version == ProtocolVersion(0x05) {
+            if let Some(connack_properties) = &mut self.connack_properties {
+                let prop_bytes = connack_properties.build_bytes()?;
+                prop_len = prop_bytes.len();
+                let encoded_len = encode_variable_bytes(prop_len);
+                encoded_properties_len = Some(encoded_len);
+                properties_bytes = Some(prop_bytes);
+            } else {
+                encoded_properties_len = Some(encode_variable_bytes(0));
+                properties_bytes = Some(bytes::Bytes::new());
+            }
+            // remain length is properties only.
         }
-        // remain length is properties only.
-        let encoded_properties_len = encode_variable_bytes(properties_len);
-        let mut buf =
-            bytes::BytesMut::with_capacity(3 + encoded_properties_len.len() + properties_len);
-        let remain_length =
-            encode_variable_bytes(2 + encoded_properties_len.len() + properties_len);
+
+        // with capacityは自動で拡張されるので問題ない
+        // 3 = header / remaining length / propertyの長さ
+        let remaining_length = 2 /* session present flag and Connection return code */ + 
+        if self.version == mqtt::ProtocolVersion(0x05) { 1 /* props length */ + prop_len } else { 0 };
+        
+        buf = bytes::BytesMut::with_capacity(
+            5 /* 1bytes contrl header + variable max: 4 bytes*/ + remaining_length
+        );
+        //
+        let encoded_remaining_length = encode_variable_bytes(
+            remaining_length
+        );
         /* Fixed header */
         buf.put_u8(0b00100000);
         /* remaining length */
-        buf.extend_from_slice(&remain_length);
+        buf.extend_from_slice(&encoded_remaining_length);
         /* Variable header */
         /* 1byte */
         if self.session_present {
@@ -303,13 +327,18 @@ impl Connack {
         // Connect Reason Code
         buf.put_u8(self.connect_reason as u8);
 
-        /* Properties length */
-        buf.extend_from_slice(&encoded_properties_len);
+        if self.version == ProtocolVersion(0x05) {
+            /* Properties length */
+            if let Some(props_length) = encoded_properties_len {
+                buf.extend_from_slice(&props_length);
+            }
 
-        /* Properties */
-        if let Some(_) = self.connack_properties {
-            buf.extend_from_slice(&properties_bytes);
+            /* Properties */
+            if let Some(props_bytes) = properties_bytes {
+                buf.extend_from_slice(&props_bytes);
+            }
         }
+        dbg!(format!("0x{}", encode(&buf)));
         Ok(buf.freeze())
     }
 }
@@ -602,9 +631,15 @@ impl ProtocolName {
 }
 
 #[derive(PartialEq, Debug, Default, Clone, Copy)]
-struct ProtocolVersion(u8);
+pub struct ProtocolVersion(u8);
 impl ProtocolVersion {
-    fn try_from(
+    pub fn new(version: u8) -> Self {
+        Self(version)
+    }
+    pub fn value(self) -> u8 {
+        self.0
+    }
+    pub fn try_from(
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
@@ -1176,10 +1211,7 @@ impl MqttPacket for Publish {
         Ok(0)
     }
     // [TODO]
-    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
-        todo!()
-    }
-    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
     }
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
@@ -1449,12 +1481,10 @@ impl MqttPacket for Connect {
 
         return Ok(next_pos);
     }
-    fn encode_fixed_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
     }
-    fn encode_variable_header(&self) -> Result<Bytes, MqttError> {
-        todo!()
-    }
+
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
@@ -1528,8 +1558,8 @@ mod tests {
     use bytes::Buf;
 
     use super::decoder::*;
-    use crate::mqtt::ControlPacket;
     use crate::mqtt::*;
+    use crate::mqtt::{self, ControlPacket};
     fn decode_hex(str: &str) -> bytes::BytesMut {
         let decoded = hex::decode(str).unwrap();
         bytes::BytesMut::from(&decoded[..])
@@ -1863,6 +1893,7 @@ mod tests {
             session_present: false,
             connect_reason: ConnackReason::Success,
             connack_properties: None,
+            version: mqtt::ProtocolVersion(0x05),
         };
         let result_bytes = connack.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
@@ -1882,6 +1913,7 @@ mod tests {
             session_present: false,
             connect_reason: ConnackReason::NotAuthorized,
             connack_properties: None,
+            version: mqtt::ProtocolVersion(0x05),
         };
         let result_bytes = connack.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
@@ -1911,6 +1943,7 @@ mod tests {
             session_present: false,
             connect_reason: ConnackReason::Success,
             connack_properties: Some(p),
+            version: mqtt::ProtocolVersion(0x05),
         };
 
         let result_bytes = connack.build_bytes().unwrap();
