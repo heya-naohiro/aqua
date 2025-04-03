@@ -25,6 +25,7 @@ pub enum ControlPacket {
     PUBLISH(Publish),
     #[default]
     UNDEFINED,
+    SUBSCRIBE(Subscribe),
     /*
     PUBACK(Puback),
     PUBREC(Pubrec),
@@ -61,6 +62,7 @@ impl MqttPacket for ControlPacket {
         match self {
             ControlPacket::CONNECT(p) => p.decode_payload(buf, start_pos),
             ControlPacket::PUBLISH(p) => p.decode_payload(buf, start_pos),
+            ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -72,6 +74,7 @@ impl MqttPacket for ControlPacket {
         match self {
             ControlPacket::CONNECT(p) => p.decode_variable_header(buf, start_pos),
             ControlPacket::PUBLISH(p) => p.decode_variable_header(buf, start_pos),
+            ControlPacket::SUBSCRIBE(p) => p.decode_variable_header(buf, start_pos),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -345,6 +348,48 @@ impl Connack {
 }
 
 #[derive(PartialEq, Debug, Default)]
+pub struct Subscribe {
+    pub packet_id: PacketId,
+    pub sub_properties: SubscribeProperties,
+    /* payload */
+    pub topic_filters: Vec<TopicFilter>,
+}
+
+#[derive(PartialEq, Debug, Default)]
+pub struct SubscribeProperties {
+    subscription_identifier: Option<SubscriptionIdentifier>,
+    user_properties: Option<Vec<UserProperty>>,
+}
+
+#[derive(PartialEq, Debug, Default)]
+pub struct TopicFilter {
+    pub topic_filter: String,
+    pub subscribe_options: SubscribeOption,
+}
+
+#[derive(PartialEq, Debug, Default)]
+pub struct SubscribeOption {
+    pub retain_handling: RetainHandling,
+    pub retain_as_published: RetainAsPublished,
+    pub no_local: NoLocal,
+    pub qos: QoS,
+}
+
+#[derive(PartialEq, Debug, Default)]
+enum RetainHandling {
+    #[default]
+    ReceiveAll,
+    IgnoreRetainedInitial,
+    IgnoreRetainedAlways,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct RetainAsPublished(bool);
+
+#[derive(PartialEq, Debug, Default)]
+struct NoLocal(bool);
+
+#[derive(PartialEq, Debug, Default)]
 pub struct Publish {
     pub remain_length: usize,
     pub dup: Dup,
@@ -392,7 +437,7 @@ impl TopicName {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 struct PacketId(u16);
 impl PacketId {
     fn try_from(
@@ -1080,7 +1125,7 @@ impl ClientId {
     ) -> std::result::Result<(Self, usize), MqttError> {
         let (res, pos) = decode_utf8_string(buf, start_pos)?;
         /*
-        if !res.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if !res.chars().all(|c| c.ids_ascii_alphanumeric()) {
             return Err(MqttError::InvalidFormat);
         }
          */
@@ -1090,6 +1135,65 @@ impl ClientId {
         self.0
     }
 }
+
+impl MqttPacket for Subscribe {
+    fn decode_variable_header(
+            &mut self,
+            buf: &bytes::BytesMut,
+            start_pos: usize,
+        ) -> Result<usize, MqttError> {
+        let mut next_pos;
+        (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
+        let property_length;
+        (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+        let end_pos = next_pos + property_length;
+        loop {
+            if next_pos == end_pos {
+                break;
+            }
+            if next_pos > end_pos {
+                return Err(MqttError::InvalidFormat);
+            }
+            match buf[next_pos] {
+                PROPERTY_USER_PROPERTY_ID => {
+                    let user_property;
+                    (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                    // 所有権を奪わずに変更する。
+                    self.sub_properties.user_properties
+                        .get_or_insert_with(Vec::new)
+                        .push(user_property);
+                }
+                PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
+                    let result;
+                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                    self.sub_properties.subscription_identifier = Some(result);
+                }
+                _ => {
+                    return Err(MqttError::InvalidFormat);
+                }
+            }
+        }
+        return Ok(next_pos);
+    }
+    
+    fn decode_payload(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> Result<usize, MqttError> {
+        // 次ここから！
+        todo!()
+    }
+    
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+    
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
+    }
+}
+
 
 impl MqttPacket for Publish {
     // next_positionを返す
@@ -1220,6 +1324,8 @@ impl MqttPacket for Publish {
     }
 }
 
+
+
 impl MqttPacket for Connect {
     // Connectはすべて揃っている前提でデコードする
     fn decode_variable_header(
@@ -1227,22 +1333,12 @@ impl MqttPacket for Connect {
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> Result<usize, MqttError> {
-        dbg!(start_pos);
         let (result, mut next_pos) = ProtocolName::try_from(buf, start_pos)?;
         self.protocol_name = result;
-        dbg!(next_pos);
         (self.protocol_ver, next_pos) = ProtocolVersion::try_from(buf, next_pos)?;
-        dbg!(next_pos);
         (self.connect_flags, next_pos) = ConnectFlags::try_from(buf, next_pos)?;
-        dbg!("keep alilve");
-        dbg!(next_pos);
         (self.keepalive, next_pos) = KeepAlive::try_from(buf, next_pos)?;
-        dbg!(next_pos);
         let property_length;
-        dbg!(format!("0x{:02x}", buf[next_pos]));
-        dbg!(format!("0x{:02x}", buf[next_pos + 1]));
-        dbg!(format!("0x{:02x}", buf[next_pos + 2]));
-
         dbg!(next_pos);
         // MQTT version5
         if self.protocol_ver.into_inner() != 0b00000101 {
@@ -1517,8 +1613,6 @@ pub mod decoder {
         match buf[0] >> 4 {
             0b0001 => {
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
-                dbg!(next_pos);
-
                 return Result::Ok((
                     ControlPacket::CONNECT(Connect {
                         remain_length: remaining_length,
@@ -1548,6 +1642,22 @@ pub mod decoder {
                     }),
                     next_pos,
                 ));
+            },
+            // SUBSCRIBE
+            0b1000 => {
+                if buf[0] != 0b10000010 {
+                    // decode error, must close
+                    // MUST be set to 0,0,1 and 0 respectively. The Server MUST treat any other value as malformed and close the Network Connection
+                    return Err(MqttError::InvalidFormat);
+                }
+                let (remain_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::SUBSCRIBE(Subscribe {
+                        remain_length: remain_length,
+                        ..Default::default()
+                    })
+                    ,next_pos
+                ))
             }
             _control_type => return Err(MqttError::InvalidFormat),
         };
