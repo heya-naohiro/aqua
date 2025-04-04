@@ -43,11 +43,13 @@ pub trait MqttPacket {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError>;
     fn decode_payload(
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError>;
     fn encode_header(&self) -> Result<Bytes, MqttError>;
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
@@ -58,11 +60,12 @@ impl MqttPacket for ControlPacket {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>
     ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.decode_payload(buf, start_pos),
-            ControlPacket::PUBLISH(p) => p.decode_payload(buf, start_pos),
-            ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, start_pos),
+            ControlPacket::CONNECT(p) => p.decode_payload(buf, start_pos, protocol_version),
+            ControlPacket::PUBLISH(p) => p.decode_payload(buf, start_pos, protocol_version),
+            ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, start_pos, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -70,11 +73,12 @@ impl MqttPacket for ControlPacket {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>
     ) -> Result<usize, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.decode_variable_header(buf, start_pos),
-            ControlPacket::PUBLISH(p) => p.decode_variable_header(buf, start_pos),
-            ControlPacket::SUBSCRIBE(p) => p.decode_variable_header(buf, start_pos),
+            ControlPacket::CONNECT(p) => p.decode_variable_header(buf, start_pos, protocol_version),
+            ControlPacket::PUBLISH(p) => p.decode_variable_header(buf, start_pos, protocol_version),
+            ControlPacket::SUBSCRIBE(p) => p.decode_variable_header(buf, start_pos, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -349,10 +353,12 @@ impl Connack {
 
 #[derive(PartialEq, Debug, Default)]
 pub struct Subscribe {
+    pub remain_length: usize,
     pub packet_id: PacketId,
     pub sub_properties: SubscribeProperties,
     /* payload */
-    pub topic_filters: Vec<TopicFilter>,
+    pub topic_filters: Vec<(TopicFilter, Option<SubscribeOption>)>,
+    payload_length: usize,
 }
 
 #[derive(PartialEq, Debug, Default)]
@@ -362,9 +368,15 @@ pub struct SubscribeProperties {
 }
 
 #[derive(PartialEq, Debug, Default)]
-pub struct TopicFilter {
-    pub topic_filter: String,
-    pub subscribe_options: SubscribeOption,
+pub struct TopicFilter(String);
+impl TopicFilter {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (topic_name, next_pos) = decode_utf8_string(buf, start_pos)?;
+        return Ok((TopicFilter(topic_name), next_pos));
+    }
 }
 
 #[derive(PartialEq, Debug, Default)]
@@ -374,6 +386,24 @@ pub struct SubscribeOption {
     pub no_local: NoLocal,
     pub qos: QoS,
 }
+impl SubscribeOption {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let b = buf[start_pos];
+        let qos = QoS::try_from(b & 00000011)?;
+        let nl = NoLocal((b & 00000100) != 0);
+        let rap = RetainAsPublished((b & 00001000) != 0);
+        let rh = RetainHandling::try_from(b >> 4)?;
+        return Ok((SubscribeOption{
+            retain_handling: rh,
+            retain_as_published: rap,
+            no_local: nl,
+            qos: qos
+        }, start_pos + 1))
+    }
+}
 
 #[derive(PartialEq, Debug, Default)]
 enum RetainHandling {
@@ -381,6 +411,17 @@ enum RetainHandling {
     ReceiveAll,
     IgnoreRetainedInitial,
     IgnoreRetainedAlways,
+}
+impl TryFrom<u8> for RetainHandling {
+    type Error = MqttError;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(RetainHandling::ReceiveAll),
+            1 => Ok(RetainHandling::IgnoreRetainedInitial),
+            2 => Ok(RetainHandling::IgnoreRetainedAlways),
+            _ => Err(MqttError::InvalidFormat),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Default)]
@@ -1067,7 +1108,6 @@ pub fn decode_utf8_string(
     start_pos: usize,
 ) -> Result<(String, usize), MqttError> {
     let length = decode_u16_bytes(buf, start_pos)? as usize;
-    dbg!(length); //??
     if start_pos + 2 + length > buf.len() {
         return Err(MqttError::InsufficientBytes.into());
     }
@@ -1141,38 +1181,51 @@ impl MqttPacket for Subscribe {
             &mut self,
             buf: &bytes::BytesMut,
             start_pos: usize,
+            protocol_version: Option<ProtocolVersion>,
         ) -> Result<usize, MqttError> {
+        // require protocol version
+        let protocol_version = if let Some(v) = protocol_version {
+            v
+        } else {
+            return Err(MqttError::Unexpected);
+        };
+
         let mut next_pos;
-        (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
-        let property_length;
-        (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
-        let end_pos = next_pos + property_length;
-        loop {
-            if next_pos == end_pos {
-                break;
-            }
-            if next_pos > end_pos {
-                return Err(MqttError::InvalidFormat);
-            }
-            match buf[next_pos] {
-                PROPERTY_USER_PROPERTY_ID => {
-                    let user_property;
-                    (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
-                    // 所有権を奪わずに変更する。
-                    self.sub_properties.user_properties
-                        .get_or_insert_with(Vec::new)
-                        .push(user_property);
+        (self.packet_id, next_pos) = PacketId::try_from(buf, start_pos)?;
+        if protocol_version.value() >= 5 {
+            let property_length;
+            (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            let end_pos = next_pos + property_length;
+            // [TODO] protocol version
+            loop {
+                if next_pos == end_pos {
+                    break;
                 }
-                PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
-                    let result;
-                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                    self.sub_properties.subscription_identifier = Some(result);
-                }
-                _ => {
+                if next_pos > end_pos {
                     return Err(MqttError::InvalidFormat);
+                }
+                match buf[next_pos] {
+                    PROPERTY_USER_PROPERTY_ID => {
+                        let user_property;
+                        (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                        // 所有権を奪わずに変更する。
+                        self.sub_properties.user_properties
+                            .get_or_insert_with(Vec::new)
+                            .push(user_property);
+                    }
+                    PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
+                        let result;
+                        (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                        self.sub_properties.subscription_identifier = Some(result);
+                    }
+                    _ => {
+                        return Err(MqttError::InvalidFormat);
+                    }
                 }
             }
         }
+        
+        self.payload_length = self.remain_length - (next_pos - start_pos);
         return Ok(next_pos);
     }
     
@@ -1180,9 +1233,39 @@ impl MqttPacket for Subscribe {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
-        // 次ここから！
-        todo!()
+        // require protocol version
+        let protocol_version = if let Some(v) = protocol_version {
+            v
+        } else {
+            return Err(MqttError::Unexpected);
+        };
+
+        let mut next_pos = start_pos;
+        /* guard for default */
+        if self.payload_length == 0 {
+            return Err(MqttError::Unexpected);
+        }
+        loop {
+            let f: TopicFilter;
+            let op: SubscribeOption;
+            (f, next_pos) = TopicFilter::try_from(buf, next_pos)?;
+            if protocol_version.value() >= 5 {
+                (op, next_pos) = SubscribeOption::try_from(buf, next_pos)?;
+                self.topic_filters.push((f, Some(op)));
+            } else {
+                self.topic_filters.push((f, None));
+            }
+
+            
+            if self.payload_length == next_pos - start_pos {
+                break
+            } else if self.payload_length < next_pos - start_pos {
+                return Err(MqttError::Unexpected);
+            }
+        }
+        return Ok(next_pos);
     }
     
     fn encode_header(&self) -> Result<Bytes, MqttError> {
@@ -1203,6 +1286,7 @@ impl MqttPacket for Publish {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         // topic name UTF-8 Encoded String
         let (result, mut next_pos) = TopicName::try_from(buf, start_pos)?;
@@ -1312,6 +1396,7 @@ impl MqttPacket for Publish {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         Ok(0)
     }
@@ -1332,6 +1417,7 @@ impl MqttPacket for Connect {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         let (result, mut next_pos) = ProtocolName::try_from(buf, start_pos)?;
         self.protocol_name = result;
@@ -1460,6 +1546,7 @@ impl MqttPacket for Connect {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
+        _protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         // Client Identifier(MUST)
         let mut next_pos;
@@ -1601,13 +1688,13 @@ impl Disconnect {
 
 pub mod decoder {
     use super::{
-        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect,
-        MqttError, MqttPacket, Publish,
+        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket, ProtocolVersion, Publish, Subscribe
     };
     // (, next_pos size)
     pub fn decode_fixed_header(
         buf: &bytes::BytesMut,
         start_pos: usize,
+        _protocol_version: Option<ProtocolVersion>
     ) -> Result<(ControlPacket, usize), MqttError> {
         // 最初が0である前提
         match buf[0] >> 4 {
@@ -1704,7 +1791,7 @@ mod tests {
     fn connect_minimum_decode() {
         let input = "101800044d5154540502003c00000b7075626c6973682d353439";
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b, 0);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
         assert!(ret.is_ok());
         let (packet, next_pos) = ret.unwrap();
         dbg!(next_pos);
@@ -1715,7 +1802,7 @@ mod tests {
             // variable header
             dbg!(format!("0x{:x}", b[0]));
             dbg!(format!("0x{:x}", b[1]));
-            let ret = connect.decode_variable_header(&b, 0);
+            let ret = connect.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver.into_inner() {
                 0x05 => {}
@@ -1732,7 +1819,7 @@ mod tests {
             println!("variable {}", next_pos);
             b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, 0);
+            let res = connect.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(connect.client_id.into_inner(), "publish-549".to_string());
         } else {
@@ -1744,16 +1831,16 @@ mod tests {
         let input = "3328000b68656c6c6f2f746f70696300011123\
         000126000161000132260001630001337061796c6f6164";
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b, 0);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         b.advance(consumed);
         if let ControlPacket::PUBLISH(mut publish) = packet {
-            let ret = publish.decode_variable_header(&b, 0);
+            let ret = publish.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             let consumed = ret.unwrap();
             b.advance(consumed);
-            let res = publish.decode_payload(&b, 0);
+            let res = publish.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert_eq!(publish.qos, QoS::QoS1);
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
@@ -1818,16 +1905,16 @@ mod tests {
         3652f746f706963090005313233343526000161000132260001630\
         001337061796c6f6164";
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b, 0);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         b.advance(consumed);
         if let ControlPacket::PUBLISH(mut publish) = packet {
-            let ret = publish.decode_variable_header(&b, 0);
+            let ret = publish.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             let consumed = ret.unwrap();
             b.advance(consumed);
-            let res = publish.decode_payload(&b, 0);
+            let res = publish.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert_eq!(publish.qos, QoS::QoS1);
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
@@ -1883,13 +1970,13 @@ mod tests {
         f75725f757365726e616d65000d796f75725f70617373776f7264";
 
         let mut b = decode_hex(input);
-        let ret = decode_fixed_header(&b, 0);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
         assert!(ret.is_ok());
         let (packet, consumed) = ret.unwrap();
         println!("aaaaaa:{}", consumed);
         b.advance(consumed);
         if let ControlPacket::CONNECT(mut connect) = packet {
-            let ret = connect.decode_variable_header(&b, 0);
+            let ret = connect.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             match connect.protocol_ver.into_inner() {
                 0x05 => {}
@@ -1898,7 +1985,7 @@ mod tests {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, 0);
+            let res = connect.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(
                 connect.client_id.clone().into_inner(),

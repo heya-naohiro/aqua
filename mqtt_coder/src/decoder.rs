@@ -14,6 +14,7 @@ enum DecoderState {
 pub struct Decoder {
     state: DecoderState,
     tmp_packet: ControlPacket,
+    protocol_version: Option<mqtt::ProtocolVersion>,
 }
 
 impl Decoder {
@@ -21,6 +22,7 @@ impl Decoder {
         Self {
             state: DecoderState::Done,
             tmp_packet: ControlPacket::UNDEFINED,
+            protocol_version: None,
         }
     }
     pub fn poll_decode(
@@ -41,7 +43,7 @@ impl Decoder {
                 // decode fixed header
                 // packetは状態が変わるとムーブする、性能面で気になる場合はBox<ControlPacket>に変更する
                 // [TODO] 後ほどの最適化でString->&strへの変更も 含めて？やる！！
-                match mqtt::decoder::decode_fixed_header(buf, 0) {
+                match mqtt::decoder::decode_fixed_header(buf, 0, self.protocol_version) {
                     Ok(result) => {
                         dbg!("fixed OK");
                         let next_pos;
@@ -59,7 +61,10 @@ impl Decoder {
             DecoderState::FixedHeaderDecoded => {
                 dbg!("FixedHeaderDecoded");
                 // decode variable header
-                match self.tmp_packet.decode_variable_header(buf, 0) {
+                match self
+                    .tmp_packet
+                    .decode_variable_header(buf, 0, self.protocol_version)
+                {
                     Ok(size) => {
                         buf.advance(size);
                         cx.waker().wake_by_ref();
@@ -73,7 +78,10 @@ impl Decoder {
             }
             DecoderState::VariableHeaderDecoded => {
                 // decode payload
-                match self.tmp_packet.decode_payload(buf, 0) {
+                match self
+                    .tmp_packet
+                    .decode_payload(buf, 0, self.protocol_version)
+                {
                     Ok(size) => {
                         buf.advance(size);
                         cx.waker().wake_by_ref();
