@@ -392,9 +392,9 @@ impl SubscribeOption {
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
         let b = buf[start_pos];
-        let qos = QoS::try_from(b & 00000011)?;
-        let nl = NoLocal((b & 00000100) != 0);
-        let rap = RetainAsPublished((b & 00001000) != 0);
+        let qos = QoS::try_from(b & 0b00000011)?;
+        let nl = NoLocal((b & 0b00000100) != 0);
+        let rap = RetainAsPublished((b & 0b00001000) != 0);
         let rh = RetainHandling::try_from(b >> 4)?;
         return Ok((SubscribeOption{
             retain_handling: rh,
@@ -1224,7 +1224,7 @@ impl MqttPacket for Subscribe {
                 }
             }
         }
-        
+
         self.payload_length = self.remain_length - (next_pos - start_pos);
         return Ok(next_pos);
     }
