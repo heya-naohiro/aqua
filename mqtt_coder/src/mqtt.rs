@@ -408,9 +408,9 @@ impl SubscribeOption {
 #[derive(PartialEq, Debug, Default)]
 enum RetainHandling {
     #[default]
-    ReceiveAll,
-    IgnoreRetainedInitial,
-    IgnoreRetainedAlways,
+    ReceiveAll = 0,
+    IgnoreRetainedInitial = 1,
+    IgnoreRetainedAlways = 2,
 }
 impl TryFrom<u8> for RetainHandling {
     type Error = MqttError;
@@ -639,18 +639,14 @@ impl UserProperty {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-struct SubscriptionIdentifier(u32);
+struct SubscriptionIdentifier(usize);
 impl SubscriptionIdentifier {
     fn try_from(
         buf: &bytes::BytesMut,
         start_pos: usize,
     ) -> std::result::Result<(Self, usize), MqttError> {
-        let i = u32::from_be_bytes(
-            buf[start_pos..start_pos + 4]
-                .try_into()
-                .map_err(|_| MqttError::InvalidFormat)?,
-        );
-        return Ok((SubscriptionIdentifier(i), start_pos + 4));
+        let (i, next_pos) = decode_variable_length(buf, start_pos)?;
+        return Ok((SubscriptionIdentifier(i), next_pos));
     }
 }
 
@@ -1196,7 +1192,7 @@ impl MqttPacket for Subscribe {
             let property_length;
             (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
             let end_pos = next_pos + property_length;
-            // [TODO] protocol version
+            dbg!("hello");
             loop {
                 if next_pos == end_pos {
                     break;
@@ -1204,6 +1200,8 @@ impl MqttPacket for Subscribe {
                 if next_pos > end_pos {
                     return Err(MqttError::InvalidFormat);
                 }
+                dbg!(format!("0x{:x}", buf[next_pos]));
+
                 match buf[next_pos] {
                     PROPERTY_USER_PROPERTY_ID => {
                         let user_property;
@@ -1216,6 +1214,7 @@ impl MqttPacket for Subscribe {
                     PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
                         let result;
                         (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                        dbg!(&result);
                         self.sub_properties.subscription_identifier = Some(result);
                     }
                     _ => {
@@ -2147,4 +2146,95 @@ mod tests {
         let result_bytes = connack.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
     }
+
+
+#[test]
+fn mqtt5_subscribe_parse() {
+    let input = "821f000100000b746573742f746f7069633100000b746573742f746f7069633201";
+
+    let mut b = decode_hex(input);
+    let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+    assert!(ret.is_ok());
+    let (packet, consumed) = ret.unwrap();
+    dbg!(consumed);
+    b.advance(consumed);
+    if let ControlPacket::SUBSCRIBE(mut subscribe) = packet {
+        let ret = subscribe.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+        
+        let next_pos = ret.unwrap();
+        b.advance(next_pos);
+
+        let res = subscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(res.is_ok());
+        /*
+        #[derive(PartialEq, Debug, Default)]
+        pub struct Subscribe {
+            pub remain_length: usize,
+            pub packet_id: PacketId,
+            pub sub_properties: SubscribeProperties,
+            /* payload */
+            pub topic_filters: Vec<(TopicFilter, Option<SubscribeOption>)>,
+            payload_length: usize,
 }
+         */
+        assert_eq!(subscribe.packet_id, PacketId(1));
+        assert_eq!(subscribe.topic_filters[0].0, TopicFilter("test/topic1".to_string()));
+        assert_eq!(subscribe.topic_filters[0].1, Some(SubscribeOption{
+            retain_handling: RetainHandling::default(),
+            qos: QoS::QoS0,
+            no_local: NoLocal(false),
+            retain_as_published: RetainAsPublished(false)
+        }));
+        assert_eq!(subscribe.topic_filters[1].0, TopicFilter("test/topic2".to_string()));
+        assert_eq!(subscribe.topic_filters[1].1, Some(SubscribeOption{
+            retain_handling: RetainHandling::default(),
+            qos: QoS::QoS1,
+            no_local: NoLocal(false),
+            retain_as_published: RetainAsPublished(false)
+        }));
+
+    }
+
+    }
+#[test]
+fn mqtt5_subscribe_full_parse() {
+    let input = "823e0002290b02260006736f75726365000b746573742d73637269707426000b746f7069632d696e646578000131000f746f7069632f746573742f716f73311d";
+
+    let mut b = decode_hex(input);
+    let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+    assert!(ret.is_ok());
+    let (packet, consumed) = ret.unwrap();
+    dbg!(consumed);
+    b.advance(consumed);
+    if let ControlPacket::SUBSCRIBE(mut subscribe) = packet {
+        let ret = subscribe.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+        
+        let next_pos = ret.unwrap();
+        b.advance(next_pos);
+
+        let res = subscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(res.is_ok());
+        assert_eq!(subscribe.packet_id, PacketId(2));
+        assert_eq!(subscribe.topic_filters[0].0, TopicFilter("topic/test/qos1".to_string()));
+        assert_eq!(subscribe.topic_filters[0].1, Some(SubscribeOption{
+            retain_handling: RetainHandling::IgnoreRetainedInitial,
+            qos: QoS::QoS1,
+            no_local: NoLocal(true),
+            retain_as_published: RetainAsPublished(true)
+        }));
+
+        assert_eq!(subscribe.sub_properties.subscription_identifier, Some(SubscriptionIdentifier(2)));
+        assert_eq!(subscribe.sub_properties.user_properties, 
+            Some(vec![
+                UserProperty(("source".to_string(), "test-script".to_string())),
+                UserProperty(("topic-index".to_string(), "1".to_string()))
+            ]));
+
+    }
+
+
+    }
+}
+
