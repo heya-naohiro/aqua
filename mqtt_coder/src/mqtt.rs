@@ -26,13 +26,12 @@ pub enum ControlPacket {
     #[default]
     UNDEFINED,
     SUBSCRIBE(Subscribe),
+    SUBACK(Suback),
     /*
     PUBACK(Puback),
     PUBREC(Pubrec),
     PUBREL(Pubrel),
     PUBCOMP(Pubcomp),
-    SUBSCRIBE(Subscribe),
-    SUBACK(Suback),
     PINGREQ(Pingreq),
     PINGRESP(Pingresp),
     */
@@ -447,6 +446,142 @@ struct Retain(bool); // fixed header
 #[derive(Debug, PartialEq, Clone, Default)]
 struct Dup(bool); // fixed header
 
+#[derive(PartialEq, Debug, Default)]
+pub struct Suback {
+    pub remain_length: usize,
+    pub packet_id: PacketId,
+    pub suback_properties: Option<SubackProperties>, /* MQTT5 only */
+    pub reason_codes: Vec<SubackReasonCode>,
+    pub protocol_version: ProtocolVersion,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum SubackReasonCode {
+    GrantedQoS0 = 0x00,
+    GrantedQoS1 = 0x01,
+    GrantedQoS2 = 0x02,
+    UnspecifiedError = 0x80, 
+    ImplementationSpecificError = 0x83, /* MQTT5 */
+    NotAuthorized = 0x87, /* MQTT5 */
+    TopicFilterInvalid = 0x8f, /* MQTT5 */
+    PacketIdentifierInUse = 0x91, /* MQTT5 */
+    QuotaExceeded = 0x97, /* MQTT5 */
+    SharedSubscriptionsNotSupported = 0x9e, /* MQTT5 */
+    SubscriptionIdentifiersNotSupported = 0xa1, /* MQTT5 */
+    WildcardSubscriptionsNotSupported = 0xa2, /* MQTT5 */
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct SubackProperties {
+    reason_string: Option<ReasonString>,
+    user_properties: Option<Vec<UserProperty>>,
+}
+
+impl SubackProperties {
+    fn new() -> Self {
+        Self {
+            reason_string: None, user_properties: None
+        }
+    }
+}
+
+
+#[derive(Debug, PartialEq, Clone)]
+#[repr(u8)]
+pub enum SubackProperty {
+    ReasonString(ReasonString),
+    UserProperty(UserProperty),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct ReasonString(String);
+impl ReasonString {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (value, next_pos) = decode_utf8_string(buf, start_pos)?;
+        Ok((ReasonString(value), next_pos))
+    }
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+
+impl Suback {
+    pub fn encode_header(&mut self) -> Result<Bytes, MqttError> {
+        self.build_bytes()
+    }
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        let mut buf = BytesMut::new();
+        for rc in &self.reason_codes {
+            buf.put_u8(*rc as u8); // buf は BytesMut
+        }
+        Ok(Some(buf.freeze()))
+    }
+    pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut pro = bytes::Bytes::new();
+        let mut encoded_property_length = Vec::new();
+        
+        if self.protocol_version.value() >= 5{ /* MQTT5 */
+            pro = self.suback_properties.take().unwrap_or(SubackProperties::default()).build_bytes()?;
+            let property_length = pro.len();
+            encoded_property_length = encode_variable_bytes(property_length);
+            self.remain_length = encoded_property_length.len() + pro.len() + self.reason_codes.len() /* length * 1 bytes */ + 2 /* packet id (u16) */;
+        } else {
+            /* MQTT3 */
+            self.remain_length = self.reason_codes.len() + 2;
+        }
+        let encoded_remaining_length = encode_variable_bytes(self.remain_length);
+
+        let mut buf = BytesMut::with_capacity(self.remain_length + 4 /* fix header */);
+        /* Fixed header */
+        buf.put_u8(0b10010000);
+        /* remaining length */
+        buf.extend_from_slice(&encoded_remaining_length);
+        /* Variable header */
+        // Packet ID
+        buf.put_u16(self.packet_id.value());
+
+        if self.protocol_version.value() >= 5{
+            /* Properties Length */
+            buf.extend_from_slice(&encoded_property_length);
+            buf.extend_from_slice(&pro);
+        }
+        Ok(buf.freeze())
+    }
+}
+
+
+impl SubackProperties {
+    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut buf = BytesMut::new();
+        if let Some(c) = self.reason_string.take() {
+            let c = c.into_inner();
+            buf.extend_from_slice(&[0x1f]);
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
+        }
+        if let Some(user_properties) = self.user_properties.take() {
+            for v in user_properties {
+                let v = v.into_inner();
+                buf.extend_from_slice(&[0x26]);
+                let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.0.as_bytes());
+                let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.1.as_bytes());
+            }
+        }
+        Ok(buf.freeze())
+    }
+}
+
+
+
 fn decode_lower_fixed_header(
     buf: &bytes::BytesMut,
     start_pos: usize,
@@ -489,6 +624,9 @@ impl PacketId {
             PacketId(((buf[start_pos] as u16) << 8) + buf[start_pos + 1] as u16),
             start_pos + 2,
         ))
+    }
+    pub fn value(&self) -> u16 {
+        self.0
     }
 }
 
@@ -635,6 +773,9 @@ impl UserProperty {
         let (key, next_pos) = decode_utf8_string(buf, start_pos)?;
         let (value, next_pos) = decode_utf8_string(buf, next_pos)?;
         Ok((UserProperty((key, value)), next_pos))
+    }
+    fn into_inner(self) -> (String, String) {
+        self.0
     }
 }
 
@@ -2233,8 +2374,33 @@ fn mqtt5_subscribe_full_parse() {
             ]));
 
     }
+    }
+    #[test]
+    fn write_suback_success_header_mqtt5() {
+        let expected: &[u8] = &[0x90, 0x08, 0x00, 0x0a, 0x03, 0x1f, 0x00, 0x00];
+        let mut suback = Suback {
+            remain_length: 0,
+            packet_id: PacketId(10),
+            suback_properties: Some(SubackProperties { reason_string: Some(ReasonString("".into())), user_properties: None }),
+            reason_codes: vec![SubackReasonCode::GrantedQoS0, SubackReasonCode::SubscriptionIdentifiersNotSupported],
+            protocol_version: ProtocolVersion(0x05),
+        };
+        let result_bytes = suback.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
 
-
+    #[test]
+    fn write_suback_success_header_mqtt3() {
+        let expected: &[u8] = &[0x90, 0x03, 0x00, 0x0a];
+        let mut suback = Suback {
+            remain_length: 0,
+            packet_id: PacketId(10),
+            suback_properties: None,
+            reason_codes: vec![SubackReasonCode::GrantedQoS1],
+            protocol_version: ProtocolVersion(0x04),
+        };
+        let result_bytes = suback.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
     }
 }
 
