@@ -1,76 +1,74 @@
-from paho.mqtt import client as mqtt_client
-from paho.mqtt import properties;
-from paho.mqtt import packettypes;
-import random
+import time
+import paho.mqtt.client as mqtt
+from paho.mqtt.properties import Properties
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.subscribeoptions import SubscribeOptions
 
-broker = '127.0.0.1'
-port = 1883
-topic = "python/mqtt"
-client_id = f'publish-{random.randint(0, 1000)}'
+# ===============================
+# 設定
+# ===============================
+BROKER = "localhost"
+PORT = 1883
 
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print("Connected to MQTT Broker!")
-    else:
-        print("Failed to connect, return code %d\n", rc)
+# ===============================
+# Subscribe 時に指定する Subscription Options
+# ===============================
+TOPIC_OPTIONS = [
+    # QoS 0, retain_handling = always, no_local = False
+    ("topic/test/qos0", SubscribeOptions(qos=0, noLocal=False, retainAsPublished=False, retainHandling=0)),
 
-def run():
-    client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION1, 
-                                client_id=client_id,
-                                protocol=mqtt_client.MQTTProtocolVersion.MQTTv5)
-    client.username_pw_set(username="your_username", password="your_password")
-    # client.on_connect = on_connect
-    # Willメッセージの設定
-    # Willメッセージのプロパティ設定
-    will_properties = properties.Properties(packettypes.PacketTypes.WILLMESSAGE)
-    will_properties.WillDelayInterval = 10  # Willメッセージが遅延される秒数
-    will_properties.MessageExpiryInterval = 30  # メッセージが期限切れになる秒数
-    will_properties.ContentType = "text/plain"  # メッセージの内容のタイプ
-    will_properties.PayloadFormatIndicator = 1  # ペイロードがUTF-8エンコードされた文字列
-    will_properties.ResponseTopic = "test/response"  # 応答を受け取るためのトピック
-    will_properties.CorrelationData = b"correlation_data_example"  # バイナリデータ 24bytes=0x18
-    will_properties.UserProperty = [
-        ("key1", "value1"),
-        ("key2", "value2"),
-        ("key3", "value3")
-    ]  # 複数のユーザープロパティを設定
+    # QoS 1, retain_handling = only if not existing, no_local = True
+    ("topic/test/qos1", SubscribeOptions(qos=1, noLocal=True, retainAsPublished=True, retainHandling=1)),
 
-    client.will_set(
-        topic="test/will",
-        payload="Will message",
-        qos=1,
-        retain=False,
-        properties=will_properties
-    )
+    # QoS 2, retain_handling = never send retained, no_local = False
+    ("topic/test/qos2", SubscribeOptions(qos=2, noLocal=False, retainAsPublished=False, retainHandling=2)),
+]
 
+# ===============================
+# コールバック定義
+# ===============================
+def on_connect(client, userdata, flags, reason_code, properties):
+    print(f"[on_connect] Connected with reason code: {reason_code}")
 
-    connect_properties = properties.Properties(properties.PacketTypes.CONNECT)
-    connect_properties.SessionExpiryInterval = 120  # セッションの有効期限 (秒)
-    connect_properties.ReceiveMaximum = 20  # 同時に受信可能なQoS 1またはQoS 2メッセージの最大数
-    connect_properties.MaximumPacketSize = 256 * 1024  # 最大パケットサイズ (バイト)
-    connect_properties.TopicAliasMaximum = 10  # サポートするトピックエイリアスの最大数
-    connect_properties.RequestResponseInformation = 1  # サーバーから応答トピックを要求するかどうか
-    connect_properties.RequestProblemInformation = 1  # 問題情報を要求するかどうか
-    connect_properties.UserProperty = [
-        ("connect_key1", "connect_value1"),
-        ("connect_key2", "connect_value2"),
-    ]
-    connect_properties.AuthenticationMethod = "example_auth_method"  # 認証に使用するメソッド
-    connect_properties.AuthenticationData = b"example_auth_data"  # 認証に関連するデータ
+    for i, (topic, options) in enumerate(TOPIC_OPTIONS):
+        print(f"Subscribing to: {topic} with options: {options}")
 
-    client.connect(broker, port, properties=connect_properties)
+        # SUBSCRIBE プロパティを構築
+        sub_props = Properties(PacketTypes.SUBSCRIBE)
+        sub_props.SubscriptionIdentifier = i + 1
+        sub_props.UserProperty = [("source", "test-script"), ("topic-index", str(i))]
 
-    publish_properties = properties.Properties(properties.PacketTypes.PUBLISH)
-    publish_properties.UserProperty = ("a", "2")
-    publish_properties.UserProperty = ("c", "3")
-    publish_properties.MessageExpiryInterval = 60  # メッセージの有効期限（秒）
-    publish_properties.PayloadFormatIndicator = 1  # ペイロードがUTF-8形式であることを示す
-    publish_properties.ContentType = "text/plain"
-    publish_properties.ResponseTopic = "response/topic"
-    publish_properties.CorrelationData = b"12345"
-    client.publish(topic="hello/topic", payload="payload", qos=1, retain=True, properties=publish_properties)
+        client.subscribe(topic, options=options, properties=sub_props)
 
-if __name__ == '__main__':
-    run()
-    
-    
+def on_subscribe(client, userdata, mid, granted_qos, properties):
+    print(f"[on_subscribe] MID: {mid} | Granted QoS: {granted_qos}")
+    if properties:
+        print(f"  Properties: {properties}")
+
+def on_message(client, userdata, msg):
+    print(f"[on_message] Topic: {msg.topic} | QoS: {msg.qos} | Payload: {msg.payload.decode()}")
+
+# ===============================
+# クライアント作成
+# ===============================
+client = mqtt.Client(client_id="mqtt-v5-subscriber", protocol=mqtt.MQTTv5)
+
+# Clean Start 相当のプロパティ
+connect_props = Properties(PacketTypes.CONNECT)
+connect_props.SessionExpiryInterval = 0  # 即時セッション破棄
+
+# コールバック登録
+client.on_connect = on_connect
+client.on_subscribe = on_subscribe
+client.on_message = on_message
+
+client.connect(BROKER, PORT, keepalive=60, properties=connect_props)
+client.loop_start()
+
+try:
+    while True:
+        time.sleep(5)
+except KeyboardInterrupt:
+    print("Disconnecting...")
+    client.loop_stop()
+    client.disconnect()

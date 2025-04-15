@@ -27,13 +27,15 @@ pub enum ControlPacket {
     UNDEFINED,
     SUBSCRIBE(Subscribe),
     SUBACK(Suback),
+    PINGREQ(Pingreq),
+    PINGRESP(Pingresp),
+    UNSUBSCRIBE(Unsubscribe),
     /*
+    UnsubscribeAck
     PUBACK(Puback),
     PUBREC(Pubrec),
     PUBREL(Pubrel),
     PUBCOMP(Pubcomp),
-    PINGREQ(Pingreq),
-    PINGRESP(Pingresp),
     */
 }
 
@@ -93,6 +95,26 @@ impl MqttPacket for ControlPacket {
             ControlPacket::CONNACK(p) => p.encode_payload_chunk(),
             _ => Err(MqttError::NotImplemented),
         }
+    }
+}
+
+
+#[derive(Default, Debug)]
+pub struct Pingreq {
+
+}
+
+#[derive(Default, Debug)]
+pub struct Pingresp {
+    
+}
+
+impl Pingresp {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
+        Ok(Bytes::from_static(&[0b11010000, 0x00]))
+    }
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
     }
 }
 
@@ -349,6 +371,106 @@ impl Connack {
         Ok(buf.freeze())
     }
 }
+
+#[derive(Default, Debug)]
+pub struct Unsubscribe {
+    pub topic_filters: Vec<TopicFilter>,
+    pub unsubscribe_properties: Option<UnsubscribeProperties>,
+    pub protocol_version: ProtocolVersion,
+    pub remain_length: usize,
+    pub payload_length: usize,
+}
+
+#[derive(PartialEq, Debug, Default)]
+pub struct UnsubscribeProperties {
+    user_properties: Vec<UserProperty>,
+}
+
+impl UnsubscribeProperties {
+    fn new() -> Self {
+        Self {
+            user_properties: vec![],
+        }
+    }
+    fn push(&mut self, prop: UserProperty) {
+        self.user_properties.push(prop);
+    }
+}
+
+
+impl MqttPacket for Unsubscribe {
+    fn decode_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
+    ) -> Result<usize, MqttError> {
+        let mut next_pos = start_pos;
+        if protocol_version.unwrap().value() >= 0x05 {
+            let property_length;
+            (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            let end_pos = next_pos + property_length;
+            loop {
+                    if next_pos == end_pos {
+                        break;
+                    }
+                    if next_pos > end_pos {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    dbg!(format!("0x{:x}", buf[next_pos]));
+    
+                    match buf[next_pos] {
+                        PROPERTY_USER_PROPERTY_ID => {
+                            let user_property;
+                            (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                            // 所有権を奪わずに変更する。
+                            self.unsubscribe_properties
+                                .get_or_insert_with(UnsubscribeProperties::new)
+                                .push(user_property);
+                        }
+                        _ => {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                    }
+                }
+            }
+
+
+            Ok(next_pos)
+        }
+        
+            fn decode_payload(
+                &mut self,
+                buf: &bytes::BytesMut,
+                start_pos: usize,
+                protocol_version: Option<ProtocolVersion>,
+            ) -> Result<usize, MqttError> {
+                let mut next_pos = start_pos;
+                loop {
+                    if next_pos - start_pos == self.payload_length {
+                        break; 
+                    } else if next_pos - start_pos > self.payload_length {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let res;
+                    (res, next_pos) = TopicFilter::try_from(buf, next_pos)?;
+                    self.topic_filters.push(res);
+                }
+                Ok(next_pos)                 
+            }
+        
+            fn encode_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+            }
+        
+            fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
+            }
+        
+}
+
+
+
 
 #[derive(PartialEq, Debug, Default)]
 pub struct Subscribe {
@@ -1333,7 +1455,6 @@ impl MqttPacket for Subscribe {
             let property_length;
             (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
             let end_pos = next_pos + property_length;
-            dbg!("hello");
             loop {
                 if next_pos == end_pos {
                     break;
