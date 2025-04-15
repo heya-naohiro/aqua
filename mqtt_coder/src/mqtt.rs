@@ -443,7 +443,7 @@ impl MqttPacket for Unsubscribe {
                 &mut self,
                 buf: &bytes::BytesMut,
                 start_pos: usize,
-                protocol_version: Option<ProtocolVersion>,
+                _protocol_version: Option<ProtocolVersion>,
             ) -> Result<usize, MqttError> {
                 let mut next_pos = start_pos;
                 loop {

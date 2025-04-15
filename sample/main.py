@@ -69,6 +69,11 @@ try:
     while True:
         time.sleep(5)
 except KeyboardInterrupt:
-    print("Disconnecting...")
-    client.loop_stop()
-    client.disconnect()
+    print("Interrupt received. Unsubscribing from topics and disconnecting...")
+    # 各トピックからUnsubscribeするシーケンス
+    for i, (topic, options) in enumerate(TOPIC_OPTIONS):
+        # UNSUBSCRIBE プロパティを構築
+        unsub_props = Properties(PacketTypes.UNSUBSCRIBE)
+        unsub_props.UserProperty = [("source", "test-script"), ("topic-index", str(i))]
+        print(f"Unsubscribing from: {topic} with properties: {unsub_props}")
+        client.unsubscribe(topic, properties=unsub_props)
