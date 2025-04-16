@@ -379,6 +379,7 @@ pub struct Unsubscribe {
     pub protocol_version: ProtocolVersion,
     pub remain_length: usize,
     pub payload_length: usize,
+    pub packet_id: PacketId,
 }
 
 #[derive(PartialEq, Debug, Default)]
@@ -406,6 +407,8 @@ impl MqttPacket for Unsubscribe {
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         let mut next_pos = start_pos;
+        (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
+
         if protocol_version.unwrap().value() >= 0x05 {
             let property_length;
             (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
@@ -2007,6 +2010,20 @@ pub mod decoder {
                     ,next_pos
                 ))
             }
+            // UNSUBSCRIBE
+            0b1010 => {
+                if buf[0] != 0b10100010 {
+                    return Err(MqttError::InvalidFormat);
+                }
+                let (remain_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::SUBSCRIBE(Subscribe {
+                        remain_length: remain_length,
+                        ..Default::default()
+                    })
+                    ,next_pos
+                ))
+            }
             _control_type => return Err(MqttError::InvalidFormat),
         };
     }
@@ -2522,6 +2539,67 @@ fn mqtt5_subscribe_full_parse() {
         };
         let result_bytes = suback.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
+    }
+
+    #[test]
+    fn unsubscribe_mqtt5() {
+        let input = "a26100042b260006736f75726365000b746573742d73637269707426000b756e73756273637269626500056261746368000f746f7069632f746573742f716f7330000f746f7069632f746573742f716f7331000f746f7069632f746573742f716f7332";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        dbg!(consumed);
+        b.advance(consumed);
+        if let ControlPacket::UNSUBSCRIBE(mut unsubscribe) = packet {
+            let ret = unsubscribe.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+    
+            let res = unsubscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+            assert_eq!(unsubscribe.packet_id.value(), 4);
+            assert_eq!(unsubscribe.topic_filters,
+                vec![TopicFilter("topic/test/qos0".to_string()), TopicFilter("topic/test/qos1".to_string()), TopicFilter("topic/test/qos2".to_string())]
+            );
+            assert_eq!(
+                unsubscribe
+                    .unsubscribe_properties
+                    .unwrap_or_default()
+                    .user_properties,
+                vec![
+                    UserProperty(("source".to_string(), "test-script".to_string())),
+                    UserProperty(("topic-index".to_string(), "1".to_string()))
+                ]
+            );
+    
+        }
+    }
+    // a2350004000f746f7069632f746573742f716f7330000f746f7069632f746573742f716f7331000f746f7069632f746573742f716f7332
+    #[test]
+    fn unsubscribe_mqtt3() {
+        let input = "a2350004000f746f7069632f746573742f716f7330000f746f7069632f746573742f716f7331000f746f7069632f746573742f716f7332";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(4)));
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        dbg!(consumed);
+        b.advance(consumed);
+        if let ControlPacket::UNSUBSCRIBE(mut unsubscribe) = packet {
+            let ret = unsubscribe.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+    
+            let res = unsubscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+            assert_eq!(unsubscribe.packet_id.value(), 4);
+            assert_eq!(unsubscribe.topic_filters,
+                vec![TopicFilter("topic/test/qos0".to_string()), TopicFilter("topic/test/qos1".to_string()), TopicFilter("topic/test/qos2".to_string())]
+            );
+        }
     }
 }
 

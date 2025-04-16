@@ -71,9 +71,15 @@ try:
 except KeyboardInterrupt:
     print("Interrupt received. Unsubscribing from topics and disconnecting...")
     # 各トピックからUnsubscribeするシーケンス
-    for i, (topic, options) in enumerate(TOPIC_OPTIONS):
-        # UNSUBSCRIBE プロパティを構築
-        unsub_props = Properties(PacketTypes.UNSUBSCRIBE)
-        unsub_props.UserProperty = [("source", "test-script"), ("topic-index", str(i))]
-        print(f"Unsubscribing from: {topic} with properties: {unsub_props}")
-        client.unsubscribe(topic, properties=unsub_props)
+    # トピック名だけのリストを作る
+    unsubscribe_topics = [topic for topic, _ in TOPIC_OPTIONS]
+
+    # プロパティを一つにまとめて送信
+    unsub_props = Properties(PacketTypes.UNSUBSCRIBE)
+    unsub_props.UserProperty = [("source", "test-script"), ("unsubscribe", "batch")]
+
+    print(f"Unsubscribing from topics: {unsubscribe_topics}")
+    client.unsubscribe(unsubscribe_topics, properties=unsub_props)
+
+    client.loop_stop()
+    client.disconnect()
