@@ -30,12 +30,15 @@ pub enum ControlPacket {
     PINGREQ(Pingreq),
     PINGRESP(Pingresp),
     UNSUBSCRIBE(Unsubscribe),
-    /*
-    UnsubscribeAck
-    PUBACK(Puback),
+    UNSUBACK(Unsuback),
+    PUBACK(Puback), /* for QoS1 */
+    /* 
     PUBREC(Pubrec),
     PUBREL(Pubrel),
     PUBCOMP(Pubcomp),
+    */
+    /* 
+    AUTH
     */
 }
 
@@ -497,6 +500,113 @@ impl MqttPacket for Unsubscribe {
         
 }
 
+
+#[derive(PartialEq, Debug, Default)]
+pub struct Puback {
+    pub remaining_length: usize,
+    pub packet_id: PacketId,
+    pub reason_code: Option<PubackReasonCode>,
+    pub puback_properties: Option<PubackProperties>,
+    pub protocol_version: ProtocolVersion,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct PubackProperties {
+    reason_string: Option<ReasonString>,
+    user_properties: Option<Vec<UserProperty>>,
+}
+
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum PubackReasonCode {
+    Success = 0x00,
+    NoMatchingSubscribers = 0x10,
+    UnspecifiedError = 0x80,
+    ImplementationSpecificError = 0x83, 
+    NotAuthorized = 0x87, /* MQTT5 */
+    TopicNameInvalid = 0x90, /* MQTT5 */
+    PacketIdentifierInUse = 0x91, /* MQTT5 */
+    QuotaExceeded = 0x97, /* MQTT5 */
+    PayloadFormatInvalid = 0x99, /* MQTT5 */
+}
+
+
+impl PubackProperties {
+    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut buf = BytesMut::new();
+        if let Some(c) = self.reason_string.take() {
+            let c = c.into_inner();
+            buf.extend_from_slice(&[0x1f]);
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
+        }
+        if let Some(user_properties) = self.user_properties.take() {
+            for v in user_properties {
+                let v = v.into_inner();
+                buf.extend_from_slice(&[0x26]);
+                let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.0.as_bytes());
+                let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.1.as_bytes());
+            }
+        }
+        Ok(buf.freeze())
+    }
+}
+
+
+impl Puback {
+    pub fn encode_header(&mut self) -> Result<Bytes, MqttError> {
+        self.build_bytes()
+    }
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
+    }
+    pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut pro = bytes::Bytes::new();
+        let mut encoded_property_length = Vec::new();
+
+        if self.protocol_version.value() >= 5 { /* MQTT5 */
+            if  let Some(_) = self.reason_code {
+                pro = self.puback_properties.take().unwrap_or(PubackProperties::default()).build_bytes()?;
+                let property_length = pro.len();
+                encoded_property_length = encode_variable_bytes(property_length);
+                self.remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
+            } else {
+                self.remaining_length = 2;
+            }
+         } else {
+            /* MQTT3 */
+            self.remaining_length = 2;
+        }
+        let encoded_remaining_length = encode_variable_bytes(self.remaining_length);
+
+        let mut buf = BytesMut::with_capacity(self.remaining_length + 4 /* fix header */);
+        /* Fixed header */
+        buf.put_u8(0b01000000);
+        /* remaining length */
+
+        buf.extend_from_slice(&encoded_remaining_length);
+        /* Variable header */
+        // Packet ID
+        buf.put_u16(self.packet_id.value());
+        if self.protocol_version.value() >= 5{
+            // reason code and property length can be omited if success
+            if let Some(reason_code) = self.reason_code {
+                buf.put_u8(reason_code as u8);
+                /* Properties Length */
+                buf.extend_from_slice(&encoded_property_length);
+                buf.extend_from_slice(&pro);
+            }
+        }
+        Ok(buf.freeze())
+    }
+}
+
+
 #[derive(PartialEq, Debug, Default)]
 pub struct Unsuback {
     pub remaining_length: usize,
@@ -511,6 +621,7 @@ struct UnsubackProperties {
     reason_string: Option<ReasonString>,
     user_properties: Option<Vec<UserProperty>>,
 }
+
 
 
 impl UnsubackProperties {
