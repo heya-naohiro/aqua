@@ -32,11 +32,9 @@ pub enum ControlPacket {
     UNSUBSCRIBE(Unsubscribe),
     UNSUBACK(Unsuback),
     PUBACK(Puback), /* for QoS1 */ 
-    PUBREC(Pubrec),
-    /* 
-    PUBREL(Pubrel),
-    PUBCOMP(Pubcomp),
-    */
+    PUBREC(Pubrec), /* for QoS1 */ 
+    PUBREL(Pubrel), /* for QoS2 */ 
+    PUBCOMP(Pubcomp), /* for QoS2 */ 
     /* 
     AUTH
     */
@@ -72,6 +70,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, start_pos, protocol_version),
             ControlPacket::UNSUBSCRIBE(p) => p.decode_payload(buf, start_pos, protocol_version),
             ControlPacket::PINGREQ(p) => p.decode_payload(buf, start_pos, protocol_version),
+            ControlPacket::PUBREL(p) => p.decode_payload(buf, start_pos, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -712,6 +711,202 @@ impl Pubrec {
 }
 
 
+#[derive(PartialEq, Debug, Default)]
+pub struct Pubrel {
+    pub remaining_length: usize,
+    pub packet_id: PacketId,
+    pub pubrel_properties: Option<PubrelProperties>,
+    pub reason_code: Option<PubrelReasonCode>,
+    pub protocol_version: ProtocolVersion,
+}
+
+#[derive(PartialEq, Debug, Default)]
+struct PubrelProperties {
+    reason_string: Option<ReasonString>,
+    user_properties: Vec<UserProperty>,
+}
+
+impl PubrelProperties {
+    fn new() -> Self {
+        Self {
+            user_properties: vec![],
+            reason_string: None,
+        }
+    }
+    fn push(&mut self, prop: UserProperty) {
+        self.user_properties
+            .push(prop);
+    }
+}
+
+
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum PubrelReasonCode {
+    Success = 0x00,
+    PacketIdentifierNotFound = 0x92,
+}
+
+impl PubrelReasonCode {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let byte = buf.get(start_pos).ok_or(MqttError::InvalidFormat)?;
+        let r = match byte {
+            0x00 => PubrelReasonCode::Success,
+            0x92 => PubrelReasonCode::PacketIdentifierNotFound,
+            _ => return Err(MqttError::InvalidFormat),
+        };
+        return Ok((r, start_pos + 1));
+    }
+}
+
+impl Pubrel {
+    fn decode_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+        protocol_version: Option<ProtocolVersion>,
+    ) -> Result<usize, MqttError> {
+        let mut next_pos = start_pos;
+        (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
+        if self.remaining_length == 2 {
+            return Ok(next_pos);
+        }
+        let (reason_code, mut next_pos) = PubrelReasonCode::try_from(buf, next_pos)?;
+        self.reason_code = Some(reason_code);
+        if protocol_version.unwrap().value() >= 0x05 {
+            let property_length;
+            (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            let end_pos = next_pos + property_length;
+            loop {
+                    if next_pos == end_pos {
+                        break;
+                    }
+                    if next_pos > end_pos {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    dbg!(format!("0x{:x}", buf[next_pos]));
+    
+                    match buf[next_pos] {
+                        PROPERTY_USER_PROPERTY_ID => {
+                            let user_property;
+                            (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                            // 所有権を奪わずに変更する。
+                            self.pubrel_properties
+                                .get_or_insert_with(PubrelProperties::new).user_properties
+                                .push(user_property);
+                        }
+                        PROPERTY_REASON_STRING_ID => {
+                            let reason_string;
+                            (reason_string, next_pos) = decode_utf8_string(buf, next_pos + 1)?;
+                            self.pubrel_properties.get_or_insert_with(PubrelProperties::new).reason_string = Some(mqtt::ReasonString(reason_string));
+                        }
+                        _ => {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                    }
+                }
+            }
+
+
+            Ok(next_pos)
+    }
+    fn decode_payload(
+        &mut self,
+        _buf: &bytes::BytesMut,
+        _start_pos: usize,
+        _protocol_version: Option<ProtocolVersion>,
+    ) -> Result<usize, MqttError> {
+        Ok(0)
+    }
+}
+
+
+#[derive(PartialEq, Debug, Default)]
+pub struct Pubcomp {
+    pub remaining_length: usize,
+    pub packet_id: PacketId,
+    pub pubcomp_reason: PubcompReasonCode,
+}
+
+
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
+enum PubcompReasonCode {
+    #[default]
+    Success = 0x00,
+    PacketIdentifierNotFound = 0x92,
+}
+
+
+#[derive(PartialEq, Debug, Default)]
+struct PubcompProperties {
+    reason_string: Option<ReasonString>,
+    user_properties: Vec<UserProperty>,
+}
+
+impl PubcompProperties {
+    fn new() -> Self {
+        Self {
+            user_properties: vec![],
+            reason_string: None,
+        }
+    }
+    fn push(&mut self, prop: UserProperty) {
+        self.user_properties
+            .push(prop);
+    }
+}
+impl PubcompProperties {
+    pub fn encode_header(&mut self) -> Result<Bytes, MqttError> {
+        self.build_bytes()
+    }
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
+    }
+    fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut buf = BytesMut::new();
+        if let Some(c) = &self.reason_string {
+            let c = c.clone().into_inner();
+            buf.extend_from_slice(&[0x1f]);
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
+        }
+            for v in &self.user_properties {
+                let v = v.clone().into_inner();
+                buf.extend_from_slice(&[0x26]);
+                let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.0.as_bytes());
+                let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(v.1.as_bytes());
+            }
+        
+        Ok(buf.freeze())
+    }
+
+}
+
+
+impl PubcompReasonCode {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let byte = buf.get(start_pos).ok_or(MqttError::InvalidFormat)?;
+        let r = match byte {
+            0x00 => PubcompReasonCode::Success,
+            0x92 => PubcompReasonCode::PacketIdentifierNotFound,
+            _ => return Err(MqttError::InvalidFormat),
+        };
+        return Ok((r, start_pos + 1));
+    }
+}
+
 
 
 #[derive(PartialEq, Debug, Default)]
@@ -757,6 +952,7 @@ impl UnsubackProperties {
     }
 }
 
+#[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum UnsubackReasonCode {
     Success = 0x00,
@@ -1104,7 +1300,6 @@ const PROPERTY_CORRELATION_DATA_ID: u8 = 0x09;
 const PROPERTY_USER_PROPERTY_ID: u8 = 0x26;
 const PROPERTY_SUBSCRIPTION_IDENTIFIER_ID: u8 = 0x0b;
 const PROPERTY_CONTENT_TYPE_ID: u8 = 0x03;
-
 // Property keys
 const PROPERTY_SESSION_EXPIRY_INTERVAL: u8 = 0x11;
 const PROPERTY_RECIEVE_MAXIMUM: u8 = 0x21;
@@ -1117,6 +1312,10 @@ const PROPERTY_AUTHENTICATION_DATA: u8 = 0x16;
 
 // Property keys
 const PROPERTY_WILL_DELAY_INTERVAL: u8 = 0x18;
+
+// Property keys PUBREL
+const PROPERTY_REASON_STRING_ID: u8 = 0x1f;
+
 
 // [TODO] ConnectProperties / WillPropertyもこうする
 #[derive(PartialEq, Debug, Default)]
