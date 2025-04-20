@@ -512,7 +512,7 @@ pub struct Puback {
 #[derive(PartialEq, Debug, Default)]
 struct PubackProperties {
     reason_string: Option<ReasonString>,
-    user_properties: Option<Vec<UserProperty>>,
+    user_properties: Vec<UserProperty>,
 }
 
 #[repr(u8)]
@@ -540,18 +540,17 @@ impl PubackProperties {
             buf.extend_from_slice(&l.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
         }
-        if let Some(user_properties) = self.user_properties.take() {
-            for v in user_properties {
-                let v = v.into_inner();
-                buf.extend_from_slice(&[0x26]);
-                let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
-                buf.extend_from_slice(&l.to_be_bytes());
-                buf.extend_from_slice(v.0.as_bytes());
-                let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
-                buf.extend_from_slice(&l.to_be_bytes());
-                buf.extend_from_slice(v.1.as_bytes());
-            }
+        for v in self.user_properties.drain(..) {
+            let v = v.into_inner();
+            buf.extend_from_slice(&[0x26]);
+            let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.0.as_bytes());
+            let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.1.as_bytes());
         }
+        
         Ok(buf.freeze())
     }
 }
@@ -861,7 +860,7 @@ impl Pubcomp {
 
         let mut buf = BytesMut::with_capacity(self.remaining_length + 4 /* fix header */);
         /* Fixed header */
-        buf.put_u8(0b01010000);
+        buf.put_u8(0b01110000);
         /* remaining length */
 
         buf.extend_from_slice(&encoded_remaining_length);
@@ -3222,6 +3221,103 @@ fn mqtt5_subscribe_full_parse() {
         };
 
         let result_bytes = suback.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+
+    #[test]
+    fn mqtt5_puback_write() {
+        let expected: &[u8] = &[
+            0x40, // PUBACK packet type + flags
+            0x1d, // Remaining Length = 29
+
+            0x00, 0x10, // Packet Identifier = 16
+            0x87,       // Reason Code = Not Authorized
+
+            0x19,       // Property Length = 25
+
+            0x1F,       // Reason String
+            0x00, 0x0B, // String length = 11
+            b'N', b'o', b't', b' ', b'a', b'l', b'l', b'o', b'w', b'e', b'd',
+
+            0x26,       // User Property
+            0x00, 0x03, // Key length = 3
+            b'f', b'o', b'o',
+            0x00, 0x03, // Value length = 3
+            b'b', b'a', b'r',
+        ];
+        let mut puback = Puback {
+            remaining_length: 0,
+            packet_id : PacketId(16),
+            reason_code: Some(PubackReasonCode::NotAuthorized),
+            puback_properties: Some(PubackProperties { reason_string: Some(ReasonString("Not allowed".to_string())), 
+                user_properties: vec![UserProperty(("foo".to_string(), "bar".to_string()))] }),
+            protocol_version: ProtocolVersion(0x05),
+        };
+        let result_bytes = puback.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+
+    #[test]
+    fn mqtt5_pubrec_write() {
+        let expected: &[u8] = &[
+            0x50, // PUBREC packet type + flags
+            0x1b, // Remaining Length = 27
+        
+            0x00, 0x21, // Packet Identifier = 33
+            0x80,       // Reason Code = Unspecified Error
+        
+            0x17,       // Property Length = 18
+        
+            0x1F,       // Reason String
+            0x00, 0x06, // Length = 6
+            b'E', b'r', b'r', b'o', b'r', b'!',
+        
+            0x26,       // User Property
+            0x00, 0x04, // Key length = 4
+            b'k', b'e', b'y', b'1',
+            0x00, 0x05, // Value length = 5
+            b'v', b'a', b'l', b'u', b'e',
+        ];
+        let mut pubrec = Pubrec {
+            remaining_length: 0,
+            packet_id : PacketId(33),
+            reason_code: Some(PubrecReasonCode::UnspecifiedError),
+            pubrec_properties: Some(PubrecProperties { reason_string: Some(ReasonString("Error!".to_string())), user_properties: Some(vec![UserProperty(("key1".to_string(), "value".to_string()))]) }),
+            protocol_version: ProtocolVersion(0x05),
+        };
+        let result_bytes = pubrec.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+    #[test]
+    fn mqtt5_pubcomp_write() {
+        let expected: &[u8] = &[
+            0x70, // PUBCOMP packet type + flags
+            0x1c, // Remaining Length = 28
+        
+            0x00, 0x21, // Packet Identifier = 33
+            0x00,       // Reason Code = Success
+        
+            0x18,       // Property Length = 24
+        
+            0x1F,       // Reason String
+            0x00, 0x07,
+            b'S', b'u', b'c', b'c', b'e', b's', b's',
+        
+            0x26,       // User Property
+            0x00, 0x04,
+            b'k', b'e', b'y', b'2',
+            0x00, 0x05,
+            b'v', b'a', b'l', b'u', b'e',
+        ];
+        let mut pubcomp = Pubcomp {
+            remaining_length: 0,
+            packet_id : PacketId(33),
+            pubcomp_reason: Some(PubcompReasonCode::Success),
+            pubcomp_properties: Some(PubcompProperties { reason_string: Some(ReasonString("Success".to_string())), 
+            user_properties: vec![UserProperty(("key2".to_string(), "value".to_string()))] }),
+            protocol_version: ProtocolVersion(0x05),
+        };
+        let result_bytes = pubcomp.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
     }
 }
