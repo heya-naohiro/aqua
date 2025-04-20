@@ -3320,5 +3320,59 @@ fn mqtt5_subscribe_full_parse() {
         let result_bytes = pubcomp.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
     }
+    #[test]
+    fn mqtt3_puback_write() {
+        // ── PUBACK (QoS1 の ACK)
+        let expected: &[u8] = &[
+            0x40,       // Packet Type = PUBACK (0x4 << 4) + Flags = 0
+            0x02,       // Remaining Length = 2
+            0x00, 0x10, // Packet Identifier = 16
+        ];
+        let mut puback = Puback {
+            remaining_length: 0,
+            packet_id : PacketId(16),
+            reason_code: None,
+            puback_properties: None,
+            protocol_version: ProtocolVersion(0x04),
+        };
+        let result_bytes = puback.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+    #[test]
+    fn mqtt3_pubrec_write() {
+        // ── PUBREC (QoS2 の応答その1)
+        let expected: &[u8] = &[
+            0x50,       // Packet Type = PUBREC (0x5 << 4) + Flags = 0
+            0x02,       // Remaining Length = 2
+            0x00, 0x10, // Packet Identifier = 16
+        ];
+        let mut pubrec = Pubrec {
+            remaining_length: 0,
+            packet_id : PacketId(16),
+            reason_code: None,
+            pubrec_properties: None,
+            protocol_version: ProtocolVersion(0x04),
+        };
+        let result_bytes = pubrec.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
+    #[test]
+    fn mqtt3_pubcomp_write() {
+        // ── PUBCOMP (QoS2 の完了応答)
+        let expected: &[u8] = &[
+            0x70,       // Packet Type = PUBCOMP (0x7 << 4) + Flags = 0
+            0x02,       // Remaining Length = 2
+            0x00, 0x10, // Packet Identifier = 16
+        ];
+        let mut pubcomp = Pubcomp {
+            remaining_length: 0,
+            packet_id : PacketId(16),
+            pubcomp_reason: None,
+            pubcomp_properties: None,
+            protocol_version: ProtocolVersion(0x04),
+        };
+        let result_bytes = pubcomp.build_bytes().unwrap();
+        assert_eq!(result_bytes.as_ref(), expected);
+    }
 }
 
