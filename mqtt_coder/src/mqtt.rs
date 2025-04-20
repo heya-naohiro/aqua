@@ -828,7 +828,9 @@ impl Pubrel {
 pub struct Pubcomp {
     pub remaining_length: usize,
     pub packet_id: PacketId,
-    pub pubcomp_reason: PubcompReasonCode,
+    pub pubcomp_reason: Option<PubcompReasonCode>,
+    pub protocol_version: ProtocolVersion,
+    pub pubcomp_properties: Option<PubcompProperties>,
 }
 
 
@@ -838,6 +840,48 @@ enum PubcompReasonCode {
     #[default]
     Success = 0x00,
     PacketIdentifierNotFound = 0x92,
+}
+
+impl Pubcomp {
+    pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut pro = bytes::Bytes::new();
+        let mut encoded_property_length = Vec::new();
+        let omit = (self.pubcomp_reason == None) && (self.pubcomp_properties == None);
+        // Properties
+        if self.protocol_version.value() >= 5 && !omit { /* MQTT5 */
+            pro = self.pubcomp_properties.take().unwrap_or(PubcompProperties::default()).build_bytes()?;
+            let property_length = pro.len();
+            encoded_property_length = encode_variable_bytes(property_length);
+            self.remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
+         } else {
+            /* MQTT3 もしくは自明な場合(omit)では常に2byteとなる*/
+            self.remaining_length = 2;
+        }
+        let encoded_remaining_length = encode_variable_bytes(self.remaining_length);
+
+        let mut buf = BytesMut::with_capacity(self.remaining_length + 4 /* fix header */);
+        /* Fixed header */
+        buf.put_u8(0b01010000);
+        /* remaining length */
+
+        buf.extend_from_slice(&encoded_remaining_length);
+        /* Variable header */
+        // Packet ID
+        buf.put_u16(self.packet_id.value());
+
+        if self.protocol_version.value() >= 5 && !omit {
+            if let Some(reason_code) = self.pubcomp_reason {
+                /* Reason code */
+                buf.put_u8(reason_code as u8);
+                /* Properties Length */
+                buf.extend_from_slice(&encoded_property_length);
+                /* Properties */
+                buf.extend_from_slice(&pro);
+            }
+
+        }
+        Ok(buf.freeze())
+    }
 }
 
 
