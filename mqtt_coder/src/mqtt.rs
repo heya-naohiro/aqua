@@ -2534,7 +2534,7 @@ impl Disconnect {
 
 pub mod decoder {
     use super::{
-        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket, ProtocolVersion, Publish, Subscribe
+        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, MqttPacket, ProtocolVersion, Publish, Pubrel, Subscribe
     };
     // (, next_pos size)
     pub fn decode_fixed_header(
@@ -2601,6 +2601,19 @@ pub mod decoder {
                 return Ok((
                     ControlPacket::SUBSCRIBE(Subscribe {
                         remain_length: remain_length,
+                        ..Default::default()
+                    })
+                    ,next_pos
+                ))
+            }
+            0b0110 => {
+                if buf[0] != 0b01100010 {
+                    return Err(MqttError::InvalidFormat);
+                }
+                let (remain_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBREL(Pubrel {
+                        remaining_length: remain_length,
                         ..Default::default()
                     })
                     ,next_pos
@@ -3373,6 +3386,56 @@ fn mqtt5_subscribe_full_parse() {
         };
         let result_bytes = pubcomp.build_bytes().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
+    }
+
+    // 62020001
+    #[test]
+    fn pubrel_simple() {
+        let input = "62020001";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(4)));
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        dbg!(consumed);
+        b.advance(consumed);
+        if let ControlPacket::PUBREL(mut pubrel) = packet {
+            let ret = pubrel.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+    
+            let res = pubrel.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+
+            assert_eq!(pubrel.packet_id.value(), 1);
+
+        }
+    }
+
+    #[test]
+    fn pubrel_mqtt_5() {
+        let input = "62101234000C1F0009436F6D706C65746564";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        assert!(ret.is_ok());
+        let (packet, consumed) = ret.unwrap();
+        dbg!(consumed);
+        b.advance(consumed);
+        if let ControlPacket::PUBREL(mut pubrel) = packet {
+            let ret = pubrel.decode_variable_header(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+    
+            let res = pubrel.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+
+            assert_eq!(pubrel.packet_id.value(), 0x1234);
+            assert_eq!(pubrel.reason_code, Some(PubrelReasonCode::Success));
+            assert_eq!(pubrel.pubrel_properties.unwrap().reason_string, Some(mqtt::ReasonString("Completed".to_string())));
+
+
+        }
     }
 }
 
