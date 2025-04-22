@@ -1,7 +1,7 @@
 use aqua::Connection;
 use aqua::{request, response};
 use aqua::{ConnackError, ConnackResponse};
-use mqtt_coder::mqtt::{self, Connack, ControlPacket, ProtocolVersion};
+use mqtt_coder::mqtt::{self, Connack, ControlPacket, Pingresp, ProtocolVersion};
 use paho_mqtt;
 use std::convert::Infallible;
 use std::{net::SocketAddr, time::Duration};
@@ -24,6 +24,14 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                 Box::pin(async move {
                     // ここでは CONNECT 以外はデフォルトレスポンスを返す
                     println!("(normal) Received request");
+                    match req.body {
+                        ControlPacket::PINGREQ(_ping) => {
+                            return Ok(response::Response::new(ControlPacket::PINGRESP(
+                                Pingresp {},
+                            )))
+                        }
+                        _ => {}
+                    }
                     Ok::<_, std::io::Error>(response::Response::default())
                 })
             }))
@@ -35,26 +43,18 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                 Box::pin(async move {
                     println!("(connect) Processing request");
                     match req.body {
-                        ControlPacket::CONNECT(connect_data) => {
+                        ControlPacket::CONNECT(_connect_data) => {
                             // CONNECT パケットを受け取ったとき
-                            if let ControlPacket::CONNACK(connack_data) =
-                                ControlPacket::CONNACK(Connack {
-                                    remaining_length: 0,
-                                    session_present: false,
-                                    connect_reason: mqtt::ConnackReason::Success,
-                                    connack_properties: None,
-                                    version: ProtocolVersion::new(0x04),
-                                })
-                            {
-                                let connack_response = ConnackResponse::from(connack_data);
-                                dbg!("(connect) Connack response, ", &connack_response);
-                                Ok(connack_response)
-                            } else {
-                                // エラー発生時は ConnackError を返す
-                                Err(ConnackError {
-                                    reason_code: mqtt::ConnackReason::UnspecifiedError,
-                                })
-                            }
+                            let connack_data = Connack {
+                                remaining_length: 0,
+                                session_present: false,
+                                connect_reason: mqtt::ConnackReason::Success,
+                                connack_properties: None,
+                                version: ProtocolVersion::new(0x04),
+                            };
+                            let connack_response = ConnackResponse::from(connack_data);
+                            dbg!("(connect) Connack response, ", &connack_response);
+                            Ok(connack_response)
                         }
                         _ => {
                             println!("(connect) Received non-CONNECT packet");

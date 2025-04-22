@@ -92,6 +92,12 @@ impl MqttPacket for ControlPacket {
     fn encode_header(&self) -> Result<Bytes, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_header(),
+            ControlPacket::PINGRESP(p) => p.encode_header(),
+            ControlPacket::SUBACK(p) => p.encode_header(),
+            ControlPacket::PUBACK(p) => p.encode_header(),
+            ControlPacket::PUBREC(p) => p.encode_header(),
+            ControlPacket::PUBCOMP(p) => p.encode_header(),
+            ControlPacket::UNSUBACK(p) => p.encode_header(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -99,6 +105,12 @@ impl MqttPacket for ControlPacket {
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_payload_chunk(),
+            ControlPacket::PINGRESP(p) => p.encode_payload_chunk(),
+            ControlPacket::SUBACK(p) => p.encode_payload_chunk(),
+            ControlPacket::PUBACK(p) => p.encode_payload_chunk(),
+            ControlPacket::PUBREC(p) => p.encode_payload_chunk(),
+            ControlPacket::PUBCOMP(p) => p.encode_payload_chunk(),
+            ControlPacket::UNSUBACK(p) => p.encode_payload_chunk(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -557,7 +569,7 @@ impl PubackProperties {
 
 
 impl Puback {
-    pub fn encode_header(&mut self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         self.build_bytes()
     }
     pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
@@ -842,6 +854,9 @@ enum PubcompReasonCode {
 }
 
 impl Pubcomp {
+    fn encode_header(&mut self) -> Result<Bytes, MqttError> {
+        self.build_bytes()
+    }
     pub fn build_bytes(&mut self) -> std::result::Result<bytes::Bytes, MqttError> {
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
@@ -3438,4 +3453,3 @@ fn mqtt5_subscribe_full_parse() {
         }
     }
 }
-
