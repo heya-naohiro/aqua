@@ -53,8 +53,8 @@ pub trait MqttPacket {
         start_pos: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError>;
-    fn encode_header(&self) -> Result<Bytes, MqttError>;
-    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
+    fn encode_header(&mut self) -> Result<Bytes, MqttError>;
+    fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError>;
 }
 
 impl MqttPacket for ControlPacket {
@@ -89,7 +89,7 @@ impl MqttPacket for ControlPacket {
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn encode_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_header(),
             ControlPacket::PINGRESP(p) => p.encode_header(),
@@ -102,7 +102,7 @@ impl MqttPacket for ControlPacket {
         }
     }
 
-    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_payload_chunk(),
             ControlPacket::PINGRESP(p) => p.encode_payload_chunk(),
@@ -501,11 +501,11 @@ impl MqttPacket for Unsubscribe {
                 Ok(next_pos)                 
             }
         
-            fn encode_header(&self) -> Result<Bytes, MqttError> {
+            fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         todo!()
             }
         
-            fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+            fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError> {
         todo!()
             }
         
@@ -569,7 +569,7 @@ impl PubackProperties {
 
 
 impl Puback {
-    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         self.build_bytes()
     }
     pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
@@ -895,6 +895,9 @@ impl Pubcomp {
 
         }
         Ok(buf.freeze())
+    }
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
     }
 }
 
@@ -2129,11 +2132,11 @@ impl MqttPacket for Subscribe {
         return Ok(next_pos);
     }
     
-    fn encode_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         todo!()
     }
     
-    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
@@ -2262,10 +2265,10 @@ impl MqttPacket for Publish {
         Ok(0)
     }
     // [TODO]
-    fn encode_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         todo!()
     }
-    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
@@ -2526,11 +2529,11 @@ impl MqttPacket for Connect {
 
         return Ok(next_pos);
     }
-    fn encode_header(&self) -> Result<Bytes, MqttError> {
+    fn encode_header(&mut self) -> Result<Bytes, MqttError> {
         todo!()
     }
 
-    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&mut self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
