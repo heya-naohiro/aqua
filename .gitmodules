@@ -1,0 +1,3 @@
+[submodule "interoperability_pytest/paho.mqtt.testing.git"]
+	path = interoperability_pytest/paho.mqtt.testing.git
+	url = git@github.com:heya-naohiro/paho.mqtt.testing.git
