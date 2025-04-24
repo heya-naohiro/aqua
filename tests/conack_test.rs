@@ -45,7 +45,6 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                         ControlPacket::CONNECT(_connect_data) => {
                             // CONNECT パケットを受け取ったとき
                             let connack_data = Connack {
-                                remaining_length: 0,
                                 session_present: false,
                                 connect_reason: mqtt::ConnackReason::Success,
                                 connack_properties: None,

@@ -12,7 +12,6 @@ pub struct ConnackResponse {
 impl ConnackResponse {
     pub fn to_connack(self) -> mqtt::Connack {
         mqtt::Connack {
-            remaining_length: 0,
             session_present: self.session_present,
             connect_reason: mqtt::ConnackReason::Success,
             connack_properties: self.connack_properties.map(|prop| prop.into()),

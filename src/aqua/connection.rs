@@ -4,7 +4,6 @@ pub mod response;
 
 use bytes::Buf;
 use bytes::BytesMut;
-use hex::encode;
 use mqtt_coder::decoder;
 use mqtt_coder::encoder;
 use mqtt_coder::mqtt;
@@ -208,11 +207,7 @@ where
         response: connack_response::ConnackResponse,
     ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
         // [TODO]詰め替えの抑制？
-        let mut connack = response.to_connack();
-        match connack.build_bytes() {
-            Ok(_) => (),
-            Err(err) => return Poll::Ready(Err(err.into())),
-        }
+        let connack = response.to_connack();
         let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
         dbg!("write packet will", &res);
         return self.write_packet(cx, &res);

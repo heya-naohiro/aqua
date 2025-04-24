@@ -27,7 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // PING要求に対する応答
                         ControlPacket::PINGREQ(_ping) => {
                             println!("Received PINGREQ, responding with PINGRESP");
-                            return Ok(Response::new(ControlPacket::PINGRESP(Pingresp {})));
+                            return Ok::<Response, Infallible>(Response::new(
+                                ControlPacket::PINGRESP(Pingresp {}),
+                            ));
                         }
                         // SUBSCRIBE要求に対する応答
                         ControlPacket::SUBSCRIBE(subscribe) => {
@@ -55,14 +57,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // SUBACKパケットを作成
                             let suback = Suback {
-                                remain_length: 0, // 自動計算される
                                 packet_id,
                                 suback_properties: None, // MQTT5のみで使用
                                 reason_codes,
-                                protocol_version: ProtocolVersion(0x04), // MQTT 3.1.1
+                                protocol_version: ProtocolVersion::new(0x04), // MQTT 3.1.1
                             };
 
-                            return Ok(Response::new(ControlPacket::SUBACK(suback)));
+                            return Ok::<Response, Infallible>(Response::new(
+                                ControlPacket::SUBACK(suback),
+                            ));
                         }
                         // PUBLISH要求に対する応答（QoSに依存）
                         ControlPacket::PUBLISH(publish) => {
@@ -71,20 +74,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 QoS::QoS0 => {
                                     // QoS0の場合は応答不要
                                     println!("  QoS0: No acknowledgement required");
-                                    return Ok(Response::default());
+                                    return Ok::<Response, Infallible>(Response::default());
                                 }
                                 QoS::QoS1 => {
                                     // QoS1の場合はPUBACKを返す
                                     println!("  QoS1: Responding with PUBACK");
                                     if let Some(packet_id) = publish.packet_id {
                                         let puback = mqtt::Puback {
-                                            remaining_length: 0, // 自動計算される
                                             packet_id,
                                             reason_code: None,
                                             puback_properties: None,
-                                            protocol_version: ProtocolVersion(0x04), // MQTT 3.1.1
+                                            protocol_version: ProtocolVersion::new(0x04), // MQTT 3.1.1
                                         };
-                                        return Ok(Response::new(ControlPacket::PUBACK(puback)));
+                                        return Ok::<Response, Infallible>(Response::new(
+                                            ControlPacket::PUBACK(puback),
+                                        ));
                                     }
                                 }
                                 QoS::QoS2 => {
@@ -92,44 +96,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     println!("  QoS2: Responding with PUBREC");
                                     if let Some(packet_id) = publish.packet_id {
                                         let pubrec = mqtt::Pubrec {
-                                            remaining_length: 0, // 自動計算される
                                             packet_id,
                                             reason_code: None,
                                             pubrec_properties: None,
-                                            protocol_version: ProtocolVersion(0x04), // MQTT 3.1.1
+                                            protocol_version: ProtocolVersion::new(0x04), // MQTT 3.1.1
                                         };
-                                        return Ok(Response::new(ControlPacket::PUBREC(pubrec)));
+                                        return Ok::<Response, Infallible>(Response::new(
+                                            ControlPacket::PUBREC(pubrec),
+                                        ));
                                     }
                                 }
                             }
-                            return Ok(Response::default());
+                            return Ok::<Response, Infallible>(Response::default());
                         }
                         // PUBRELに対する応答（QoS2の第2段階）
                         ControlPacket::PUBREL(pubrel) => {
                             println!("Received PUBREL, responding with PUBCOMP");
                             let pubcomp = mqtt::Pubcomp {
-                                remaining_length: 0,
                                 packet_id: pubrel.packet_id,
                                 pubcomp_reason: None,
-                                protocol_version: ProtocolVersion(0x04),
+                                protocol_version: ProtocolVersion::new(0x04),
                                 pubcomp_properties: None,
                             };
-                            return Ok(Response::new(ControlPacket::PUBCOMP(pubcomp)));
+                            return Ok::<Response, Infallible>(Response::new(
+                                ControlPacket::PUBCOMP(pubcomp),
+                            ));
                         }
                         // UNSUBSCRIBEに対する応答
                         ControlPacket::UNSUBSCRIBE(unsubscribe) => {
                             println!("Received UNSUBSCRIBE, responding with UNSUBACK");
                             let unsuback = mqtt::Unsuback {
-                                remaining_length: 0,
                                 packet_id: unsubscribe.packet_id,
                                 unsuback_properties: None,
                                 reason_codes: vec![
                                     mqtt::UnsubackReasonCode::Success;
                                     unsubscribe.topic_filters.len()
                                 ],
-                                protocol_version: ProtocolVersion(0x04),
+                                protocol_version: ProtocolVersion::new(0x04),
                             };
-                            return Ok(Response::new(ControlPacket::UNSUBACK(unsuback)));
+                            return Ok::<Response, Infallible>(Response::new(
+                                ControlPacket::UNSUBACK(unsuback),
+                            ));
                         }
                         _ => {
                             println!("Received other packet type");
@@ -153,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // CONNECT パケットを受け取ったとき
                             println!("Received CONNECT: {:?}", connect_data.client_id);
                             let protocol_version = connect_data.protocol_ver;
-                            let mut connack_response = ConnackResponse {
+                            let connack_response = ConnackResponse {
                                 session_present: false,
                                 version: protocol_version,
                                 connack_properties: None,
@@ -172,5 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // `serve` を使ってサーバーを起動
-    aqua::serve(listener, make_service, make_connect_service).await
+    aqua::serve(listener, make_service, make_connect_service).await?;
+
+    Ok(())
 }

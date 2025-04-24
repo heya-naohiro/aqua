@@ -52,8 +52,8 @@ pub trait MqttPacket {
         start_pos: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError>;
-    fn encode_header(self) -> Result<Bytes, MqttError>;
-    fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError>;
+    fn encode_header(&self) -> Result<Bytes, MqttError>;
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
 }
 
 impl MqttPacket for ControlPacket {
@@ -89,7 +89,7 @@ impl MqttPacket for ControlPacket {
             _ => Err(MqttError::NotImplemented),
         }
     }
-    fn encode_header(self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_header(),
             ControlPacket::PINGRESP(p) => p.encode_header(),
@@ -102,7 +102,7 @@ impl MqttPacket for ControlPacket {
         }
     }
 
-    fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         match self {
             ControlPacket::CONNACK(p) => p.encode_payload_chunk(),
             ControlPacket::PINGRESP(p) => p.encode_payload_chunk(),
@@ -150,7 +150,7 @@ pub struct Pingresp {
 }
 
 impl Pingresp {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         Ok(Bytes::from_static(&[0b11010000, 0x00]))
     }
     pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
@@ -342,8 +342,7 @@ impl ConnackProperties {
 }
 
 impl Connack {
-    fn encode_header(self) -> Result<Bytes, MqttError> {
-        dbg!(&self);
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         let mut buf;
         let mut encoded_properties_len: Option<Vec<u8>> = None;
         let mut properties_bytes: Option<bytes::Bytes> = None;
@@ -498,11 +497,11 @@ impl MqttPacket for Unsubscribe {
                 Ok(next_pos)                 
             }
         
-            fn encode_header(self) -> Result<Bytes, MqttError> {
+            fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
             }
         
-            fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+            fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
             }
         
@@ -517,15 +516,15 @@ pub struct Puback {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(PartialEq, Debug, Default)]
-struct PubackProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct PubackProperties {
     reason_string: Option<ReasonString>,
     user_properties: Vec<UserProperty>,
 }
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum PubackReasonCode {
+pub enum PubackReasonCode {
     Success = 0x00,
     NoMatchingSubscribers = 0x10,
     UnspecifiedError = 0x80,
@@ -565,13 +564,13 @@ impl PubackProperties {
 
 
 impl Puback {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
         let remaining_length;
         if self.protocol_version.value() >= 5 { /* MQTT5 */
             if  let Some(_) = self.reason_code {
-                pro = self.puback_properties.unwrap_or(PubackProperties::default()).build_bytes()?;
+                pro = self.puback_properties.clone().unwrap_or(PubackProperties::default()).build_bytes()?;
                 let property_length = pro.len();
                 encoded_property_length = encode_variable_bytes(property_length);
                 remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
@@ -604,12 +603,12 @@ impl Puback {
         }
         Ok(buf.freeze())
     }
-    pub fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         Ok(None)
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Pubrec {
     pub packet_id: PacketId,
     pub reason_code: Option<PubrecReasonCode>,
@@ -617,15 +616,15 @@ pub struct Pubrec {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(PartialEq, Debug, Default)]
-struct PubrecProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct PubrecProperties {
     reason_string: Option<ReasonString>,
     user_properties: Option<Vec<UserProperty>>,
 }
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum PubrecReasonCode {
+pub enum PubrecReasonCode {
     Success = 0x00,
     NoMatchingSubscribers = 0x10,
     UnspecifiedError = 0x80,
@@ -666,13 +665,13 @@ impl PubrecProperties {
 
 
 impl Pubrec {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
         let remaining_length;
         if self.protocol_version.value() >= 5 { /* MQTT5 */
             if  let Some(_) = self.reason_code {
-                pro = self.pubrec_properties.unwrap_or(PubrecProperties::default()).build_bytes()?;
+                pro = self.pubrec_properties.clone().unwrap_or(PubrecProperties::default()).build_bytes()?;
                 let property_length = pro.len();
                 encoded_property_length = encode_variable_bytes(property_length);
                 remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
@@ -835,21 +834,21 @@ pub struct Pubcomp {
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
-enum PubcompReasonCode {
+pub enum PubcompReasonCode {
     #[default]
     Success = 0x00,
     PacketIdentifierNotFound = 0x92,
 }
 
 impl Pubcomp {
-    fn encode_header(self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
         let remaining_length;
         let omit = (self.pubcomp_reason == None) && (self.pubcomp_properties == None);
         // Properties
         if self.protocol_version.value() >= 5 && !omit { /* MQTT5 */
-            pro = self.pubcomp_properties.unwrap_or(PubcompProperties::default()).build_bytes()?;
+            pro = self.pubcomp_properties.clone().unwrap_or(PubcompProperties::default()).encode()?;
             let property_length = pro.len();
             encoded_property_length = encode_variable_bytes(property_length);
             remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
@@ -888,14 +887,14 @@ impl Pubcomp {
 }
 
 
-#[derive(PartialEq, Debug, Default)]
-struct PubcompProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct PubcompProperties {
     reason_string: Option<ReasonString>,
     user_properties: Vec<UserProperty>,
 }
 
 impl PubcompProperties {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             user_properties: vec![],
             reason_string: None,
@@ -907,13 +906,7 @@ impl PubcompProperties {
     }
 }
 impl PubcompProperties {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
-        self.build_bytes()
-    }
-    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
-        Ok(None)
-    }
-    fn build_bytes(self) -> std::result::Result<bytes::Bytes, MqttError> {
+    pub fn encode(&self) -> Result<Bytes, MqttError> {
         let mut buf = BytesMut::new();
         if let Some(c) = &self.reason_string {
             let c = c.clone().into_inner();
@@ -935,7 +928,9 @@ impl PubcompProperties {
         
         Ok(buf.freeze())
     }
-
+    pub fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
+    }
 }
 
 
@@ -956,7 +951,7 @@ impl PubcompReasonCode {
 
 
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Unsuback {
     pub packet_id: PacketId,
     pub unsuback_properties: Option<UnsubackProperties>,
@@ -964,8 +959,8 @@ pub struct Unsuback {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(PartialEq, Debug, Default)]
-struct UnsubackProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct UnsubackProperties {
     reason_string: Option<ReasonString>,
     user_properties: Option<Vec<UserProperty>>,
 }
@@ -1000,7 +995,7 @@ impl UnsubackProperties {
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum UnsubackReasonCode {
+pub enum UnsubackReasonCode {
     Success = 0x00,
     NoSubscriptionExisted = 0x11,
     UnspecifiedError = 0x80,
@@ -1013,12 +1008,12 @@ enum UnsubackReasonCode {
 
 
 impl Unsuback {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
         let remaining_length;
         if self.protocol_version.value() >= 5{ /* MQTT5 */
-            pro = self.unsuback_properties.unwrap_or(UnsubackProperties::default()).build_bytes()?;
+            pro = self.unsuback_properties.clone().unwrap_or(UnsubackProperties::default()).build_bytes()?;
             let property_length = pro.len();
             encoded_property_length = encode_variable_bytes(property_length);
             remaining_length = encoded_property_length.len() + pro.len() + self.reason_codes.len() /* length * 1 bytes */ + 2 /* packet id (u16) */;
@@ -1108,7 +1103,7 @@ impl SubscribeOption {
 }
 
 #[derive(PartialEq, Debug, Default)]
-enum RetainHandling {
+pub enum RetainHandling {
     #[default]
     ReceiveAll = 0,
     IgnoreRetainedInitial = 1,
@@ -1157,7 +1152,7 @@ pub struct Suback {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum SubackReasonCode {
+pub enum SubackReasonCode {
     GrantedQoS0 = 0x00,
     GrantedQoS1 = 0x01,
     GrantedQoS2 = 0x02,
@@ -1172,8 +1167,8 @@ enum SubackReasonCode {
     WildcardSubscriptionsNotSupported = 0xa2, /* MQTT5 */
 }
 
-#[derive(PartialEq, Debug, Default)]
-struct SubackProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct SubackProperties {
     reason_string: Option<ReasonString>,
     user_properties: Option<Vec<UserProperty>>,
 }
@@ -1211,13 +1206,13 @@ impl ReasonString {
 
 
 impl Suback {
-    pub fn encode_header(self) -> Result<Bytes, MqttError> {
+    pub fn encode_header(&self) -> Result<Bytes, MqttError> {
         let remaining_length;
         let mut pro = bytes::Bytes::new();
         let mut encoded_property_length = Vec::new();
         
         if self.protocol_version.value() >= 5{ /* MQTT5 */
-            pro = self.suback_properties.unwrap_or(SubackProperties::default()).build_bytes()?;
+            pro = self.suback_properties.clone().unwrap_or(SubackProperties::default()).build_bytes()?;
             let property_length = pro.len();
             encoded_property_length = encode_variable_bytes(property_length);
             remaining_length = encoded_property_length.len() + pro.len() + self.reason_codes.len() /* length * 1 bytes */ + 2 /* packet id (u16) */;
@@ -1313,7 +1308,7 @@ impl TopicName {
 }
 
 #[derive(Debug, PartialEq, Clone, Default)]
-struct PacketId(u16);
+pub struct PacketId(u16);
 impl PacketId {
     fn try_from(
         buf: &bytes::BytesMut,
@@ -1370,7 +1365,7 @@ struct PublishProperties {
 
 #[derive(Debug, PartialEq, Clone)]
 #[repr(u8)]
-enum PublishProperty {
+pub enum PublishProperty {
     PayloadFormatIndicator(PayloadFormatIndicator),
     MessageExpiryInterval(MessageExpiryInterval),
     TopicAlias(TopicAlias),
@@ -1382,7 +1377,7 @@ enum PublishProperty {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-enum PayloadFormatIndicator {
+pub enum PayloadFormatIndicator {
     UnspecifiedBytes,
     UTF8,
 }
@@ -1506,7 +1501,7 @@ impl ContentType {
 }
 
 #[derive(PartialEq, Debug, Default, Clone, Copy)]
-enum QoS {
+pub enum QoS {
     #[default]
     QoS0,
     QoS1,
@@ -1995,7 +1990,7 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
 }
 
 #[derive(PartialEq, Debug, Default, Clone)]
-struct ClientId(String);
+pub struct ClientId(String);
 impl ClientId {
     fn try_from(
         buf: &bytes::BytesMut,
@@ -2109,11 +2104,11 @@ impl MqttPacket for Subscribe {
         return Ok(next_pos);
     }
     
-    fn encode_header(self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
     }
     
-    fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
@@ -2243,10 +2238,10 @@ impl MqttPacket for Publish {
         Ok(0)
     }
     // [TODO]
-    fn encode_header(self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
     }
-    fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
@@ -2508,11 +2503,11 @@ impl MqttPacket for Connect {
 
         return Ok(next_pos);
     }
-    fn encode_header(self) -> Result<Bytes, MqttError> {
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
     }
 
-    fn encode_payload_chunk(self) -> Result<Option<Bytes>, MqttError> {
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
     }
 }
