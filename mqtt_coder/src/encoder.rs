@@ -24,8 +24,8 @@ impl Encoder {
 
     pub fn poll_encode(
         &mut self,
-        cx: &mut Context<'_>,
-        packet: &ControlPacket,
+        _cx: &mut Context<'_>,
+        packet: ControlPacket,
         buffer: &mut BytesMut,
     ) -> Poll<Result<Option<()>, Box<dyn std::error::Error>>> {
         dbg!("poll encode", &self.state);

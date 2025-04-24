@@ -15,6 +15,7 @@ pub struct Decoder {
     state: DecoderState,
     tmp_packet: ControlPacket,
     protocol_version: Option<mqtt::ProtocolVersion>,
+    remaining_length: usize,
 }
 
 impl Decoder {
@@ -23,6 +24,7 @@ impl Decoder {
             state: DecoderState::Done,
             tmp_packet: ControlPacket::UNDEFINED,
             protocol_version: None,
+            remaining_length: 0,
         }
     }
     pub fn poll_decode(
@@ -47,7 +49,7 @@ impl Decoder {
                     Ok(result) => {
                         dbg!("fixed OK");
                         let next_pos;
-                        (self.tmp_packet, next_pos) = result;
+                        (self.tmp_packet, next_pos, self.remaining_length) = result;
                         buf.advance(next_pos);
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::FixedHeaderDecoded;
@@ -61,10 +63,12 @@ impl Decoder {
             DecoderState::FixedHeaderDecoded => {
                 dbg!("FixedHeaderDecoded");
                 // decode variable header
-                match self
-                    .tmp_packet
-                    .decode_variable_header(buf, 0, self.protocol_version)
-                {
+                match self.tmp_packet.decode_variable_header(
+                    buf,
+                    0,
+                    self.remaining_length,
+                    self.protocol_version,
+                ) {
                     Ok(size) => {
                         buf.advance(size);
                         cx.waker().wake_by_ref();
