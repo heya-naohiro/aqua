@@ -35,6 +35,7 @@ hex = "0.4.3"
 tokio = { version = "1", features = ["full"] }
 paho-mqtt = "0.13.1"
 aqua = { path = "." }
+dashmap = "6.1.0"
 
 [lib]
 name = "aqua"

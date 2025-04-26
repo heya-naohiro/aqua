@@ -44,7 +44,7 @@ impl fmt::Display for ConnackError {
 impl std::error::Error for ConnackError {}
 
 impl From<std::io::Error> for ConnackError {
-    fn from(err: std::io::Error) -> Self {
+    fn from(_err: std::io::Error) -> Self {
         // 必要に応じた変換処理を実装
         ConnackError {
             reason_code: mqtt::ConnackReason::UnspecifiedError,

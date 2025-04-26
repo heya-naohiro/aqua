@@ -1054,7 +1054,7 @@ pub struct Subscribe {
     pub packet_id: PacketId,
     pub sub_properties: SubscribeProperties,
     /* payload */
-    pub topic_filters: Vec<(TopicFilter, Option<SubscribeOption>)>,
+    pub topic_filters: Vec<(TopicFilter, SubscribeOption)>,
     payload_length: usize,
 }
 
@@ -1165,6 +1165,16 @@ pub enum SubackReasonCode {
     SharedSubscriptionsNotSupported = 0x9e, /* MQTT5 */
     SubscriptionIdentifiersNotSupported = 0xa1, /* MQTT5 */
     WildcardSubscriptionsNotSupported = 0xa2, /* MQTT5 */
+}
+
+impl From<QoS> for SubackReasonCode {
+    fn from(value: QoS) -> Self {
+        match value {
+            QoS::QoS0 => Self::GrantedQoS0,
+            QoS::QoS1 => Self::GrantedQoS1,
+            QoS::QoS2 => Self::GrantedQoS2,
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Default, Clone)]
@@ -2087,12 +2097,8 @@ impl MqttPacket for Subscribe {
             let f: TopicFilter;
             let op: SubscribeOption;
             (f, next_pos) = TopicFilter::try_from(buf, next_pos)?;
-            if protocol_version.value() >= 5 {
-                (op, next_pos) = SubscribeOption::try_from(buf, next_pos)?;
-                self.topic_filters.push((f, Some(op)));
-            } else {
-                self.topic_filters.push((f, None));
-            }
+            (op, next_pos) = SubscribeOption::try_from(buf, next_pos)?;
+            self.topic_filters.push((f, op));
 
             
             if self.payload_length == next_pos - start_pos {
@@ -3042,19 +3048,19 @@ fn mqtt5_subscribe_parse() {
          */
         assert_eq!(subscribe.packet_id, PacketId(1));
         assert_eq!(subscribe.topic_filters[0].0, TopicFilter("test/topic1".to_string()));
-        assert_eq!(subscribe.topic_filters[0].1, Some(SubscribeOption{
+        assert_eq!(subscribe.topic_filters[0].1, SubscribeOption{
             retain_handling: RetainHandling::default(),
             qos: QoS::QoS0,
             no_local: NoLocal(false),
             retain_as_published: RetainAsPublished(false)
-        }));
+        });
         assert_eq!(subscribe.topic_filters[1].0, TopicFilter("test/topic2".to_string()));
-        assert_eq!(subscribe.topic_filters[1].1, Some(SubscribeOption{
+        assert_eq!(subscribe.topic_filters[1].1, SubscribeOption{
             retain_handling: RetainHandling::default(),
             qos: QoS::QoS1,
             no_local: NoLocal(false),
             retain_as_published: RetainAsPublished(false)
-        }));
+        });
 
     }
 
@@ -3080,12 +3086,12 @@ fn mqtt5_subscribe_full_parse() {
         assert!(res.is_ok());
         assert_eq!(subscribe.packet_id, PacketId(2));
         assert_eq!(subscribe.topic_filters[0].0, TopicFilter("topic/test/qos1".to_string()));
-        assert_eq!(subscribe.topic_filters[0].1, Some(SubscribeOption{
+        assert_eq!(subscribe.topic_filters[0].1, SubscribeOption{
             retain_handling: RetainHandling::IgnoreRetainedInitial,
             qos: QoS::QoS1,
             no_local: NoLocal(true),
             retain_as_published: RetainAsPublished(true)
-        }));
+        });
 
         assert_eq!(subscribe.sub_properties.subscription_identifier, Some(SubscriptionIdentifier(2)));
         assert_eq!(subscribe.sub_properties.user_properties, 

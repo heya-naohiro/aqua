@@ -1,3 +1,9 @@
+## 
+OtherPublishのようなコントロールパケットが必要
+受信・送信をわけるのが必要
+状態の整理とリファクタ、状態の送受信の分離が必要
+
+
 protocolとして、Towerを採用する
 Towerはhttp以外にも使えるらしい
 https://github.com/tower-rs/tower/tree/master/guides

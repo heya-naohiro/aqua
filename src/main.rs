@@ -41,12 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             for (topic_filter, option) in subscribe.topic_filters {
                                 println!("  Topic filter: {:?}", topic_filter);
                                 // オプションがある場合はQoSを取得、なければデフォルトでQoS0
-                                let qos = if let Some(opt) = option {
-                                    opt.qos
-                                } else {
-                                    QoS::QoS0
-                                };
-
+                                let qos = QoS::QoS0;
                                 // QoSに応じた応答コードを追加
                                 match qos {
                                     QoS::QoS0 => reason_codes.push(SubackReasonCode::GrantedQoS0),

@@ -1,10 +1,12 @@
 use aqua::Connection;
 use aqua::{request, response};
 use aqua::{ConnackError, ConnackResponse};
-use mqtt_coder::mqtt::{self, Connack, ControlPacket, Pingresp, ProtocolVersion};
-use paho_mqtt;
+use dashmap::DashMap;
+use mqtt_coder::mqtt::{
+    self, Connack, ControlPacket, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
+};
 use std::convert::Infallible;
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 use tokio;
 use tokio::net::TcpListener;
 use tower::service_fn;
@@ -21,13 +23,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("(normal) New connection from: {:?}", incoming.addr);
             Ok::<_, Infallible>(service_fn(|req: request::Request<ControlPacket>| {
                 Box::pin(async move {
-                    // ここでは CONNECT 以外はデフォルトレスポンスを返す
                     println!("(normal) Received request");
                     match req.body {
                         ControlPacket::PINGREQ(_ping) => {
                             return Ok(response::Response::new(ControlPacket::PINGRESP(
                                 Pingresp {},
                             )))
+                        }
+                        ControlPacket::SUBSCRIBE(subpacket) => {
+                            let mut success_codes = vec![];
+                            for (_filters, suboption) in subpacket.topic_filters {
+                                success_codes.push(SubackReasonCode::from(suboption.qos));
+                            }
+                            return Ok(response::Response::new(ControlPacket::SUBACK({
+                                Suback {
+                                    packet_id: subpacket.packet_id,
+                                    suback_properties: None,
+                                    reason_codes: success_codes,
+                                    protocol_version: ProtocolVersion::new(0x05),
+                                }
+                            })));
                         }
                         _ => {}
                     }
