@@ -21,6 +21,18 @@ impl Encoder {
             state: EncodeState::Header,
         }
     }
+    pub fn encode_all(
+        &mut self,
+        packet: &ControlPacket,
+        buffer: &mut BytesMut,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let fixed_header = packet.encode_header()?;
+        buffer.extend_from_slice(&fixed_header);
+        if let Some(payload) = packet.encode_payload_chunk()? {
+            buffer.extend_from_slice(&payload);
+        }
+        Ok(())
+    }
 
     pub fn poll_encode(
         &mut self,

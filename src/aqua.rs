@@ -88,6 +88,7 @@ where
 impl<M, MC, S, SC> Debug for Serve<M, MC, S, SC>
 where
     M: Debug,
+    MC: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
@@ -101,6 +102,7 @@ where
         f.debug_struct("Serve")
             .field("tcp_listener", tcp_listener)
             .field("make_service", make_service)
+            .field("make_connect_service", make_connect_service)
             .finish()
     }
 }

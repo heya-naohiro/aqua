@@ -16,11 +16,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWriteExt;
+use tokio::io::{split, AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
-
 const BUFFER_CAPACITY: usize = 4096;
+const CHANNEL_CAPACITY: usize = 32;
 
 #[pin_project]
 pub struct Connection<S, CS, IO>
@@ -38,7 +42,9 @@ where
     service: S,
     connect_service: CS,
     #[pin]
-    io: IO,
+    reader: ReadHalf<IO>,
+    tx: mpsc::Sender<Response>,
+    write_task: JoinHandle<()>,
     state: ConnectionState<S::Future, CS::Future>,
     buffer: BytesMut,
     write_buffer: BytesMut,
@@ -73,16 +79,57 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     pub fn new(service: S, connect_service: CS, io: IO) -> Self {
+        let (reader, writer): (ReadHalf<IO>, WriteHalf<IO>) = split(io);
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+
+        let write_task = Self::spawn_writer(writer, rx);
+
         Connection {
             service,
             connect_service,
-            io,
+            reader,
+            tx,
+            write_task,
             state: ConnectionState::PreConnection,
             buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
             write_buffer: BytesMut::new(),
             decoder: decoder::Decoder::new(),
             encoder: encoder::Encoder::new(),
         }
+    }
+
+    fn spawn_writer<W>(mut writer: W, mut rx: mpsc::Receiver<Response>) -> JoinHandle<()>
+    where
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        tokio::spawn(async move {
+            let mut encoder = encoder::Encoder::new();
+            let mut write_buffer = BytesMut::new();
+            while let Some(res) = rx.recv().await {
+                let packet = res.packet;
+                match encoder.encode_all(&packet, &mut write_buffer) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        eprintln!("Encode error: {:?}", e);
+                        return;
+                    }
+                }
+
+                while !write_buffer.is_empty() {
+                    match writer.write_buf(&mut write_buffer).await {
+                        Ok(0) => {
+                            eprintln!("Connection closed during write");
+                            return;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("Write error: {:?}", e);
+                            return;
+                        }
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -136,10 +183,16 @@ where
             }
             ConnectionState::ResponseConnect(res) => {
                 dbg!("responseConnect");
-                match this.as_mut().write_connack(cx, res) {
-                    Poll::Ready(Ok(_)) => (), // Response を取得
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
-                    Poll::Pending => return Poll::Pending,
+                let connack = res.to_connack();
+                let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+                match this.tx.try_send(res) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(resp)) => {
+                        eprintln!("Channel Full droping response: {:?}", resp);
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        return Poll::Ready(Err("Channel closed".into()));
+                    }
                 }
             }
             // 要求をReadするフェーズ
@@ -168,13 +221,17 @@ where
                 };
                 new_state = Some(ConnectionState::WritingPacket(response));
             }
-            ConnectionState::WritingPacket(ref res) => match this.as_mut().write_packet(cx, res) {
-                Poll::Ready(Ok(())) => {
-                    new_state = Some(ConnectionState::ReadingPacket);
+            ConnectionState::WritingPacket(res) => {
+                match this.tx.try_send(response::Response::new(res.packet)) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(resp)) => {
+                        eprintln!("Channel Full droping response: {:?}", resp);
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        return Poll::Ready(Err("Channel closed".into()));
+                    }
                 }
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                Poll::Pending => return Poll::Pending,
-            },
+            }
             ConnectionState::Closed => {
                 return Poll::Ready(Ok(()));
             }
@@ -201,17 +258,6 @@ where
     CS::Future: Unpin,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    fn write_connack(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        response: connack_response::ConnackResponse,
-    ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        // [TODO]詰め替えの抑制？
-        let connack = response.to_connack();
-        let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
-        dbg!("write packet will", &res);
-        return self.write_packet(cx, &res);
-    }
     fn read_packet(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -219,7 +265,7 @@ where
         let this = self.project();
         let mut buf = &mut *this.buffer;
         dbg!(&buf);
-        match poll_read_buf(this.io, cx, &mut buf) {
+        match poll_read_buf(this.reader, cx, &mut buf) {
             Poll::Pending => {
                 if buf.is_empty() {
                     return Poll::Pending;
@@ -248,48 +294,5 @@ where
             },
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
         }
-    }
-    fn write_packet(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        res: &Response,
-    ) -> Poll<Result<(), Box<dyn std::error::Error>>> {
-        // as_mut() は Pin<&mut Self> のまま再取得する。
-        dbg!("Write packet!!!!!!!!");
-        let mut this = self.project();
-
-        let encoder = &mut this.encoder;
-        let write_buffer = &mut this.write_buffer;
-        match encoder.poll_encode(cx, &res.packet, write_buffer) {
-            Poll::Ready(Ok(Some(()))) => {
-                dbg!("poll encode!");
-                while !write_buffer.is_empty() {
-                    let n = {
-                        let buf = &mut *write_buffer;
-                        match Pin::new(&mut this.io).poll_write(cx, buf) {
-                            Poll::Ready(Ok(n)) => n,
-                            Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
-                            Poll::Pending => return Poll::Pending,
-                        }
-                    };
-                    if n == 0 {
-                        return Poll::Ready(Err("Connection closed during write".into()));
-                    }
-                    dbg!(&write_buffer);
-                    dbg!("advance!!", n);
-                    write_buffer.advance(n);
-                }
-                //まだ続く、Encode起因のPending
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            Poll::Ready(Ok(None)) => {
-                // エンコードが完了
-                Poll::Ready(Ok(()))
-            }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)), // エラー
-            Poll::Pending => Poll::Pending,             // エンコード待ち
-        }
-        // [TODO] 必ずbufferは終わったらclearする
     }
 }
