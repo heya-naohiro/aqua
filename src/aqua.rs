@@ -181,7 +181,7 @@ where
                         tower_connect_service,
                         Arc::<tokio::net::TcpStream>::try_unwrap(arc_tcpstream).unwrap(),
                     );
-
+                    // Connectionをセッションマネージャーに格納
                     // ここまで前処理
                     // ここが実働部
                     loop {

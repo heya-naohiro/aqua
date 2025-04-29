@@ -1,8 +1,8 @@
 pub mod connack_response;
 pub mod request;
 pub mod response;
+pub mod session_manager;
 
-use bytes::Buf;
 use bytes::BytesMut;
 use mqtt_coder::decoder;
 use mqtt_coder::encoder;

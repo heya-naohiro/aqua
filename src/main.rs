@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut reason_codes = Vec::new();
 
                             // 各トピックフィルターに対して応答コードを設定
-                            for (topic_filter, option) in subscribe.topic_filters {
+                            for (topic_filter, _option) in subscribe.topic_filters {
                                 println!("  Topic filter: {:?}", topic_filter);
                                 // オプションがある場合はQoSを取得、なければデフォルトでQoS0
                                 let qos = QoS::QoS0;
