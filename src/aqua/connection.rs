@@ -23,8 +23,13 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
+use uuid::Uuid;
 const BUFFER_CAPACITY: usize = 4096;
 const CHANNEL_CAPACITY: usize = 32;
+use crate::aqua::connection::session_manager::SessionManager;
+use once_cell::sync::Lazy;
+
+pub static SESSION_MANAGER: Lazy<SessionManager> = Lazy::new(|| SessionManager::new());
 
 #[pin_project]
 pub struct Connection<S, CS, IO>
@@ -39,6 +44,7 @@ where
     CS::Future: Unpin, // `S::Future` を `Unpin` にする
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    client_id: Uuid,
     service: S,
     connect_service: CS,
     #[pin]
@@ -81,10 +87,14 @@ where
     pub fn new(service: S, connect_service: CS, io: IO) -> Self {
         let (reader, writer): (ReadHalf<IO>, WriteHalf<IO>) = split(io);
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-
         let write_task = Self::spawn_writer(writer, rx);
+        let client_id = Uuid::new_v4();
+        let outbound = session_manager::Outbound::new(tx.clone());
+
+        SESSION_MANAGER.register(client_id, outbound);
 
         Connection {
+            client_id,
             service,
             connect_service,
             reader,
@@ -185,6 +195,7 @@ where
                 dbg!("responseConnect");
                 let connack = res.to_connack();
                 let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+                // Self
                 match this.tx.try_send(res) {
                     Ok(()) => {}
                     Err(TrySendError::Full(resp)) => {
