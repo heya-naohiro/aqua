@@ -67,7 +67,6 @@ enum ConnectionState<F, CF> {
     ReadingPacket,
     ProcessingService(Pin<Box<F>>),
     WritingPacket(Response),
-    Closed,
 }
 
 impl<S, CS, IO> Connection<S, CS, IO>
@@ -205,6 +204,7 @@ where
                         return Poll::Ready(Err("Channel closed".into()));
                     }
                 }
+                new_state = Some(ConnectionState::ReadingPacket);
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
@@ -242,9 +242,7 @@ where
                         return Poll::Ready(Err("Channel closed".into()));
                     }
                 }
-            }
-            ConnectionState::Closed => {
-                return Poll::Ready(Ok(()));
+                new_state = Some(ConnectionState::ReadingPacket);
             }
         }
         if let Some(state) = new_state {
