@@ -1,7 +1,6 @@
-use aqua::Connection;
+use aqua::SESSION_MANAGER;
 use aqua::{request, response};
 use aqua::{ConnackError, ConnackResponse};
-use dashmap::DashMap;
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
 };
@@ -44,6 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             })));
                         }
+                        ControlPacket::PUBLISH(_pubpacket) => {
+                            /* [TODO] topic implement -> clients */
+                            /* [TODO] another threads, because not need to sync */
+
+                            // SESSION_MANAGER.send(client_id, pkt)
+                        }
                         _ => {}
                     }
                     Ok::<_, std::io::Error>(response::Response::default())
@@ -84,4 +89,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     Ok(())
+}
+
+pub mod topic_manager {
+    use dashmap::DashMap;
+    use uuid::Uuid;
+
+    pub struct TopicManager {
+        topic_map: DashMap<String, Vec<Uuid>>,
+    }
+
+    impl TopicManager {
+        pub fn new() -> Self {
+            let topic_map = DashMap::new();
+            Self { topic_map }
+        }
+
+        pub fn register(&mut self, topic: String, client_id: Uuid) {
+            self.topic_map.entry(topic).or_default().push(client_id);
+        }
+
+        pub fn unregister(&mut self, topic: String, client_id: Uuid) {
+            if let Some(mut v) = self.topic_map.get_mut(&topic) {
+                v.retain(|&x| x != client_id);
+            }
+        }
+
+        pub fn subed_id(&self, topic: String) -> Vec<Uuid> {
+            let topic_filters: Vec<_> = self
+                .topic_map
+                .iter()
+                .map(|entry| entry.key().clone())
+                .collect();
+            let mut ret = vec![];
+            for topic_filter in topic_filters {
+                if self.is_match(&topic_filter, &topic) {
+                    if let Some(v2) = self.topic_map.get(&topic) {
+                        ret.extend(v2.clone());
+                    }
+                }
+            }
+            return ret;
+        }
+
+        fn is_match(&self, topic_filter: &String, topic: &String) -> bool {
+            let filter_elms: Vec<String> = topic_filter.split("/").map(|s| s.to_string()).collect();
+            let mut filter_index = 0;
+            for te in topic.split('/') {
+                if filter_elms[filter_index] == "#" {
+                    return true;
+                }
+                if te == filter_elms[filter_index] || filter_elms[filter_index] == "+" {
+                    filter_index = filter_index + 1;
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
 }

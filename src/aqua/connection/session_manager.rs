@@ -41,4 +41,11 @@ impl SessionManager {
     pub fn unregister(&self, client_id: Uuid) {
         self.inner.remove(&client_id);
     }
+    pub fn send(&self, client_id: &Uuid, pkt: ControlPacket) -> Result<(), TrySendError<Response>> {
+        if let Some(outbound) = self.inner.get(client_id) {
+            outbound.send(pkt)
+        } else {
+            Err(TrySendError::Closed(Response::new(pkt)))
+        }
+    }
 }
