@@ -3,11 +3,14 @@ use aqua::{request, response};
 use aqua::{ConnackError, ConnackResponse};
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
+    SubscribeOption,
 };
+use paho_mqtt::topic;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use tokio;
 use tokio::net::TcpListener;
+use topic_manager::TopicManager;
 use tower::service_fn;
 
 #[tokio::main]
@@ -15,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
+    let topic_mgr = TopicManager::new();
     dbg!("Hello, async_test world");
     tokio::spawn(async move {
         let listener = TcpListener::bind(addr).await.unwrap();
@@ -22,6 +26,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("(normal) New connection from: {:?}", incoming.addr);
             Ok::<_, Infallible>(service_fn(|req: request::Request<ControlPacket>| {
                 Box::pin(async move {
+                    /* client id error */
+                    let client_id = if let Some(client_id) = incoming.client_id {
+                        client_id
+                    } else {
+                        return Err(mqtt::MqttError::Unexpected);
+                    };
+
                     println!("(normal) Received request");
                     match req.body {
                         ControlPacket::PINGREQ(_ping) => {
@@ -31,7 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         ControlPacket::SUBSCRIBE(subpacket) => {
                             let mut success_codes = vec![];
-                            for (_filters, suboption) in subpacket.topic_filters {
+                            for (filter, suboption) in subpacket.topic_filters {
+                                topic_mgr.register(filter.value(), client_id, suboption);
                                 success_codes.push(SubackReasonCode::from(suboption.qos));
                             }
                             return Ok(response::Response::new(ControlPacket::SUBACK({
@@ -51,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         _ => {}
                     }
-                    Ok::<_, std::io::Error>(response::Response::default())
+                    Ok::<_, mqtt::MqttError>(response::Response::default())
                 })
             }))
         });
@@ -93,10 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 pub mod topic_manager {
     use dashmap::DashMap;
+    use mqtt_coder::mqtt::SubscribeOption;
     use uuid::Uuid;
 
     pub struct TopicManager {
-        topic_map: DashMap<String, Vec<Uuid>>,
+        topic_map: DashMap<String, Vec<(Uuid, SubscribeOption)>>,
     }
 
     impl TopicManager {
@@ -105,17 +118,20 @@ pub mod topic_manager {
             Self { topic_map }
         }
 
-        pub fn register(&mut self, topic: String, client_id: Uuid) {
-            self.topic_map.entry(topic).or_default().push(client_id);
+        pub fn register(&mut self, topic_filter: String, client_id: Uuid, option: SubscribeOption) {
+            self.topic_map
+                .entry(topic_filter)
+                .or_default()
+                .push((client_id, option));
         }
 
-        pub fn unregister(&mut self, topic: String, client_id: Uuid) {
-            if let Some(mut v) = self.topic_map.get_mut(&topic) {
-                v.retain(|&x| x != client_id);
+        pub fn unregister(&mut self, topic_filter: String, client_id: Uuid) {
+            if let Some(mut v) = self.topic_map.get_mut(&topic_filter) {
+                v.retain(|x| x.0 != client_id);
             }
         }
 
-        pub fn subed_id(&self, topic: String) -> Vec<Uuid> {
+        pub fn subed_id(&self, topic: String) -> Vec<(Uuid, SubscribeOption)> {
             let topic_filters: Vec<_> = self
                 .topic_map
                 .iter()

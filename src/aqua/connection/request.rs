@@ -18,6 +18,7 @@ impl<T> Request<T> {
 pub struct IncomingStream {
     pub tcp_stream: Arc<TcpStream>,
     pub addr: SocketAddr,
+    pub client_id: Option<uuid::Uuid>,
 }
 
 pub struct IncomingMqtt {

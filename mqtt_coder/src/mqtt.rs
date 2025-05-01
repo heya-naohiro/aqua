@@ -1074,9 +1074,12 @@ impl TopicFilter {
         let (topic_name, next_pos) = decode_utf8_string(buf, start_pos)?;
         return Ok((TopicFilter(topic_name), next_pos));
     }
+    pub fn value(self) -> String {
+        self.0
+    }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct SubscribeOption {
     pub retain_handling: RetainHandling,
     pub retain_as_published: RetainAsPublished,
@@ -1102,7 +1105,7 @@ impl SubscribeOption {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub enum RetainHandling {
     #[default]
     ReceiveAll = 0,
@@ -1121,10 +1124,10 @@ impl TryFrom<u8> for RetainHandling {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct RetainAsPublished(bool);
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct NoLocal(bool);
 
 #[derive(PartialEq, Debug, Default)]
