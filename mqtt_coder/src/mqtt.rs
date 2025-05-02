@@ -1130,7 +1130,7 @@ struct RetainAsPublished(bool);
 #[derive(PartialEq, Debug, Default, Clone)]
 struct NoLocal(bool);
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Publish {
     pub dup: Dup,
     pub qos: QoS,
@@ -1308,7 +1308,7 @@ fn decode_lower_fixed_header(
 }
 
 #[derive(Debug, PartialEq, Clone)]
-struct TopicName(String); // variable header
+pub struct TopicName(String); // variable header
 
 impl TopicName {
     fn try_from(
@@ -1317,6 +1317,9 @@ impl TopicName {
     ) -> std::result::Result<(Self, usize), MqttError> {
         let (topic_name, next_pos) = decode_utf8_string(buf, start_pos)?;
         Ok((TopicName(topic_name), next_pos))
+    }
+    pub fn value(self) -> String {
+        self.0
     }
 }
 
@@ -1364,8 +1367,8 @@ const PROPERTY_REASON_STRING_ID: u8 = 0x1f;
 
 
 // [TODO] ConnectProperties / WillPropertyもこうする
-#[derive(PartialEq, Debug, Default)]
-struct PublishProperties {
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct PublishProperties {
     payload_format_indicator: Option<PayloadFormatIndicator>,
     message_expiry_interval: Option<MessageExpiryInterval>,
     topic_alias: Option<TopicAlias>,
