@@ -1,3 +1,3 @@
-[submodule "interoperability_pytest/paho_mqtt_testing"]
-	path = interoperability_pytest/paho_mqtt_testing
-	url = git@github.com:heya-naohiro/paho.mqtt.testing.git
+[submodule "interoperability_pytest/paho_test"]
+	path = interoperability_pytest/paho_test
+	url = git@github.com:tkellogg/org.eclipse.paho.mqtt.testing.git

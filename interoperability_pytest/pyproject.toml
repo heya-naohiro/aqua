@@ -7,3 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "dotenv>=0.9.9",
 ]
+
+[dependency-groups]
+dev = [
+    "paho-mqtt>=2.1.0",
+    "pytest>=8.3.5",
+]
+
+[tool.uv]
+packages = ["paho_test"]
