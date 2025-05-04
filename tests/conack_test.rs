@@ -8,13 +8,14 @@ use std::{net::SocketAddr, time::Duration};
 use tokio;
 use tokio::net::TcpListener;
 use tower::service_fn;
+use tracing::{instrument, trace};
 
 #[tokio::test]
 async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
-    dbg!("Hello, async_test world");
+    trace!("Hello, async_test world");
     tokio::spawn(async move {
         let listener = TcpListener::bind(addr).await.unwrap();
         let make_service = service_fn(|incoming: request::IncomingStream| async move {
@@ -51,7 +52,7 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                                 version: ProtocolVersion::new(0x04),
                             };
                             let connack_response = ConnackResponse::from(connack_data);
-                            dbg!("(connect) Connack response, ", &connack_response);
+                            trace!("(connect) Connack response");
                             Ok(connack_response)
                         }
                         _ => {
@@ -62,28 +63,6 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
                 })
             }))
         });
-        /*
-        let make_service = service_fn(|incoming: request::IncomingStream| async move {
-            println!("New connection from: {:?}", incoming.addr);
-            Ok::<_, Infallible>(service_fn(|req: request::Request<ControlPacket>| {
-                Box::pin(async move {
-                    dbg!("Check request");
-                    match req.body {
-                        ControlPacket::CONNECT(connect_data) => {
-                            println!("Received CONNECT: {:?}", connect_data);
-                            let connack_packet = ControlPacket::CONNACK(Default::default());
-                            let response = response::Response::new(connack_packet);
-                            Ok::<_, std::io::Error>(response)
-                        }
-                        other => {
-                            println!("Received non-CONNECT packet: {:?}", other);
-                            Ok::<_, std::io::Error>(response::Response::default())
-                        }
-                    }
-                })
-            }))
-        });
-        */
         // `serve` を使ってサーバーを起動
         aqua::serve(listener, make_service, make_connect_service)
             .await
@@ -105,7 +84,7 @@ async fn async_test() -> Result<(), Box<dyn std::error::Error>> {
 
         let ret = client.connect(conn_opts).await;
         if let Err(e) = ret {
-            dbg!(e);
+            println!("{}", e);
         } else {
             println!("Success!!");
         }

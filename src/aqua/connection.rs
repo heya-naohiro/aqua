@@ -23,7 +23,9 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
+use tracing::{instrument, trace};
 use uuid::Uuid;
+
 const BUFFER_CAPACITY: usize = 4096;
 const CHANNEL_CAPACITY: usize = 32;
 use crate::aqua::connection::session_manager::SessionManager;
@@ -164,36 +166,38 @@ where
         match std::mem::take(&mut this.state) {
             // ここはConnectパケットを受け経ったかどうかのみ：接続管理
             ConnectionState::PreConnection => {
-                dbg!("preConnection");
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
-                        if let ControlPacket::CONNECT(_) = req.body {
+                        if let ControlPacket::CONNECT(ref packet) = req.body {
+                            // here ??
+                            this.decoder.set_protocol_version(Some(packet.protocol_ver));
                             req
                         } else {
+                            trace!("Unexpected because, this is not connect packet {:?}", req);
                             return Poll::Ready(Err(Box::new(MqttError::Unexpected)));
                         }
                     }
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending, /* Pendingで終わるため、new_stateが変わらない */
                 };
+                trace!("connection reading packet {:?}", req);
                 let fut = Box::pin((this.connect_service).call(req));
                 new_state = Some(ConnectionState::ProcessingConnect(fut));
             }
             ConnectionState::ProcessingConnect(mut fut) => {
-                dbg!("processingConnaect");
                 let connect_service_result = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => return Poll::Pending,
                 };
-                dbg!("processingConnaect, new_state");
 
                 new_state = Some(ConnectionState::ResponseConnect(connect_service_result));
             }
             ConnectionState::ResponseConnect(res) => {
-                dbg!("responseConnect");
+                trace!("response connect");
                 let connack = res.to_connack();
                 let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+
                 // Self
                 match this.tx.try_send(res) {
                     Ok(()) => {}
@@ -208,15 +212,16 @@ where
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
-                dbg!("ReadingPacket");
+                trace!("reading packet");
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
-                        dbg!("request OK!!");
+                        println!("read packet done!!");
                         req
                     }
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
                 };
+                trace!("done!!!!!");
                 if let ControlPacket::DISCONNECT(_) = req.body {
                     // -> DropでClose処理を行う
                     return Poll::Ready(Ok(()));
@@ -225,6 +230,8 @@ where
                 new_state = Some(ConnectionState::ProcessingService(fut));
             }
             ConnectionState::ProcessingService(mut fut) => {
+                trace!("processing service");
+
                 let response = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
@@ -233,6 +240,8 @@ where
                 new_state = Some(ConnectionState::WritingPacket(response));
             }
             ConnectionState::WritingPacket(res) => {
+                trace!("writing packet");
+
                 match this.tx.try_send(response::Response::new(res.packet)) {
                     Ok(()) => {}
                     Err(TrySendError::Full(resp)) => {
@@ -248,7 +257,6 @@ where
         if let Some(state) = new_state {
             this.state = state;
         }
-        dbg!("plz, poll again");
         cx.waker().wake_by_ref();
         Poll::Pending
     }
@@ -273,18 +281,25 @@ where
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
         let mut buf = &mut *this.buffer;
-        dbg!(&buf);
-        match poll_read_buf(this.reader, cx, &mut buf) {
+        let read_buf_res = match poll_read_buf(this.reader, cx, &mut buf) {
             Poll::Pending => {
+                println!("poll_read_buf → Pending, buf.len = {}", buf.len());
                 if buf.is_empty() {
                     return Poll::Pending;
                 }
                 // bufferにデータが存在する場合はdecodeを試みる
-                match this.decoder.poll_decode(cx, &mut buf) {
+                let packet = this.decoder.poll_decode(cx, &mut buf);
+                match packet {
                     Poll::Ready(Ok(control_packet)) => {
-                        Poll::Ready(Ok(Request::new(control_packet)))
+                        trace!("ready???");
+                        let res = Poll::Ready(Ok(Request::new(control_packet)));
+                        trace!("res {:?}", res);
+
+                        res
                     }
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
+                    }
                     Poll::Pending => {
                         return Poll::Pending;
                     }
@@ -295,13 +310,16 @@ where
             }
             Poll::Ready(Ok(_n)) => match this.decoder.poll_decode(cx, &mut buf) {
                 Poll::Ready(Ok(control_packet)) => Poll::Ready(Ok(Request::new(control_packet))),
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(Box::new(e))),
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
+                }
                 Poll::Pending => {
-                    dbg!("pending2");
                     return Poll::Pending;
                 }
             },
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
-        }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>)),
+        };
+        trace!("readbuf return {:?}", read_buf_res);
+        return read_buf_res;
     }
 }

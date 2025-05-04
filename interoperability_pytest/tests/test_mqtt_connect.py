@@ -7,8 +7,14 @@ import time
 class TestMqttConnect:
     def setup_method(self):
         self.connected = False
+        self.recieved_messages = []
+
         self.client = mqtt.Client()
         self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+    
+    def on_message(self, client, userdata, msg):
+        self.recieved_messages.append(msg.payload.decode())
     
     def teardown_method(self):
         self.client.disconnect()
@@ -28,3 +34,23 @@ class TestMqttConnect:
             time.sleep(0.1)
         
         assert self.connected, "MQTT failed"
+    
+    def test_subscribe_recieve(self):
+        self.client.connect("127.0.0.1", 1883, 60)
+        self.client.loop_start()
+
+        for _ in range(10):
+            if self.connected:
+                break
+            time.sleep(0.1)
+        assert self.connected, "MQTT failed"
+
+        print(" ^^^^^^^ subscribe ^^^^^^")
+        self.client.subscribe("test/topic")
+        time.sleep(10)
+        print(" ^^^^^^^ subscribe done ^^^^^^")
+
+        self.client.publish("test/topic", "Hello MQTT")
+        time.sleep(0.5)
+
+        assert "Hello MQTT" in self.recieved_messages, "Subscribe でメッセージを受信できませんでした"

@@ -146,7 +146,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CONNECT処理用サービス
     let make_connect_service = service_fn(
         |incoming: aqua::connection::request::IncomingStream| async move {
-            println!("(connect) New connection from: {:?}", incoming.addr);
             Ok::<_, Infallible>(service_fn(|req: Request<ControlPacket>| {
                 Box::pin(async move {
                     println!("(connect) Processing request");

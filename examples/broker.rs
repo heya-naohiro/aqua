@@ -14,11 +14,15 @@ use tokio;
 use tokio::net::TcpListener;
 use topic_manager::TopicManager;
 use tower::service_fn;
+use tracing::{instrument, trace};
+use tracing_subscriber;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE) // ここが重要！
+        .init();
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
     let topic_mgr = Arc::new(TopicManager::new());
@@ -29,8 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let peer = incoming.addr;
             let client_id_opt = incoming.client_id;
             async move {
-                println!("(normal) New connection from: {:?}", peer);
                 Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
+                    println!("(normal) New connection from: {:?}", peer);
+
                     let topic_mgr = Arc::clone(&topic_mgr);
                     let client_id_opt = client_id_opt;
                     Box::pin(async move {
@@ -39,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             return Err(mqtt::MqttError::Unexpected);
                         };
+
                         match req.body {
                             ControlPacket::PINGREQ(_ping) => {
                                 return Ok(response::Response::new(ControlPacket::PINGRESP(
@@ -48,6 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 let mut success_codes = vec![];
                                 for (filter, suboption) in subpacket.topic_filters {
+                                    trace!("Subscribe Done!! ");
+
                                     topic_mgr.register(filter.value(), client_id, &suboption);
                                     success_codes.push(SubackReasonCode::from(suboption.qos));
                                 }
@@ -92,7 +100,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
     let make_connect_service = service_fn(|incoming: request::IncomingStream| async move {
-        println!("(connect) New connection from: {:?}", incoming.addr);
         Ok::<_, Infallible>(service_fn(|req: request::Request<ControlPacket>| {
             Box::pin(async move {
                 println!("(connect) Processing request");
@@ -106,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             version: ProtocolVersion::new(0x04),
                         };
                         let connack_response = ConnackResponse::from(connack_data);
-                        dbg!("(connect) Connack response, ", &connack_response);
+                        trace!("(connect) Connack response");
                         Ok(connack_response)
                     }
                     _ => {

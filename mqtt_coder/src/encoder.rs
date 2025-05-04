@@ -40,26 +40,20 @@ impl Encoder {
         packet: &ControlPacket,
         buffer: &mut BytesMut,
     ) -> Poll<Result<Option<()>, Box<dyn std::error::Error>>> {
-        dbg!("poll encode", &self.state);
         match self.state {
             EncodeState::Header => {
-                dbg!("fixed header");
-                /* ここ！！このさきが実装されていない */
                 let fixed_header = packet.encode_header()?;
-                dbg!(&fixed_header);
                 buffer.extend_from_slice(&fixed_header);
                 self.state = EncodeState::Payload;
                 Poll::Ready(Ok(Some(())))
             }
             EncodeState::Payload => {
                 if let Some(chunk) = packet.encode_payload_chunk()? {
-                    dbg!(&chunk);
                     buffer.extend_from_slice(&chunk);
                     return Poll::Ready(Ok(Some(())));
                 } else {
                     /* Payloadが存在しないケース(Connack)がある */
                     self.state = EncodeState::Done;
-                    dbg!("Done");
                     return Poll::Ready(Ok(None));
                 }
             }
