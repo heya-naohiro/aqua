@@ -28,17 +28,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_fn(move |incoming: request::IncomingStream| {
             let topic_mgr = Arc::clone(&topic_mgr);
             let peer = incoming.addr;
-            let mqtt_id = incoming.mqtt_id; //使うのはMQTT IDのみ
             async move {
                 Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
                     trace!("(normal) New connection from: {:?}", peer);
 
                     let topic_mgr = Arc::clone(&topic_mgr);
-                    let mqtt_id = mqtt_id.clone();
                     Box::pin(async move {
-                        trace!("Client id processing! {:?}", mqtt_id);
-
-                        let mqtt_id = mqtt_id.ok_or(MqttError::Unexpected)?;
                         match req.body {
                             ControlPacket::PINGREQ(_ping) => {
                                 return Ok::<response::Response, MqttError>(
@@ -47,12 +42,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 let mut success_codes = vec![];
-                                for (filter, suboption) in subpacket.topic_filters {
-                                    trace!("Subscribe Done!! ");
-
-                                    topic_mgr.register(filter.value(), mqtt_id.clone(), &suboption);
-                                    success_codes.push(SubackReasonCode::from(suboption.qos));
+                                if let Some(mqtt_id) =
+                                    SESSION_MANAGER.get_mqtt_id(&incoming.client_id.unwrap())
+                                {
+                                    for (filter, suboption) in subpacket.topic_filters {
+                                        trace!("Subscribe Done!! ");
+                                        topic_mgr.register(filter.value(), &mqtt_id, &suboption);
+                                        success_codes.push(SubackReasonCode::from(suboption.qos));
+                                    }
                                 }
+
                                 return Ok(response::Response::new(ControlPacket::SUBACK({
                                     Suback {
                                         packet_id: subpacket.packet_id,
@@ -145,11 +144,11 @@ pub mod topic_manager {
             Self { topic_map }
         }
 
-        pub fn register(&self, topic_filter: String, client_id: String, option: &SubscribeOption) {
+        pub fn register(&self, topic_filter: String, client_id: &String, option: &SubscribeOption) {
             self.topic_map
                 .entry(topic_filter)
                 .or_default()
-                .push((client_id, option.clone()));
+                .push((client_id.clone(), option.clone()));
         }
 
         pub fn unregister(&self, topic_filter: String, client_id: String) {

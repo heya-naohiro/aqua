@@ -20,7 +20,6 @@ pub struct IncomingStream {
     pub tcp_stream: Arc<TcpStream>,
     pub addr: SocketAddr,
     pub client_id: Option<Uuid>,
-    pub mqtt_id: Option<String>,
 }
 
 pub struct IncomingMqtt {

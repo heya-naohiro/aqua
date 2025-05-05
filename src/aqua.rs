@@ -166,7 +166,6 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: None,
-                        mqtt_id: None,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
@@ -176,7 +175,6 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: None,
-                        mqtt_id: None,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
