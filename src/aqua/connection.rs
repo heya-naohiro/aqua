@@ -63,12 +63,12 @@ where
 #[derive(Default)]
 enum ConnectionState<F, CF> {
     #[default]
-    PreConnection,
-    ProcessingConnect(Pin<Box<CF>>),
-    ResponseConnect(connack_response::ConnackResponse),
-    ReadingPacket,
-    ProcessingService(Pin<Box<F>>),
-    WritingPacket(Response),
+    PreConnection, // index 0
+    ProcessingConnect(Pin<Box<CF>>),                    // index 1
+    ResponseConnect(connack_response::ConnackResponse), // index 2
+    ReadingPacket,                                      // index 3
+    ProcessingService(Pin<Box<F>>),                     // index 4
+    WritingPacket(Response),                            // index 5
 }
 
 impl<S, CS, IO> Connection<S, CS, IO>
@@ -85,14 +85,14 @@ where
     CS::Future: Unpin + 'static,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    pub fn new(service: S, connect_service: CS, io: IO) -> Self {
+    pub fn new(service: S, connect_service: CS, io: IO, client_id: Uuid) -> Self {
         let (reader, writer): (ReadHalf<IO>, WriteHalf<IO>) = split(io);
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let write_task = Self::spawn_writer(writer, rx);
-        let client_id = Uuid::new_v4();
+
         let outbound = session_manager::Outbound::new(tx.clone());
 
-        SESSION_MANAGER.register(client_id, outbound);
+        SESSION_MANAGER.register_client_id(client_id, outbound);
 
         Connection {
             client_id,
@@ -162,10 +162,12 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
-        let mut new_state = Some(ConnectionState::PreConnection);
+        let new_state;
+        // [注意]早期リターンするとデフォルトに戻る
         match std::mem::take(&mut this.state) {
             // ここはConnectパケットを受け経ったかどうかのみ：接続管理
             ConnectionState::PreConnection => {
+                trace!("state: ConnectionState::PreConnection");
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
                         if let ControlPacket::CONNECT(ref packet) = req.body {
@@ -178,23 +180,32 @@ where
                         }
                     }
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                    Poll::Pending => return Poll::Pending, /* Pendingで終わるため、new_stateが変わらない */
+                    Poll::Pending => {
+                        this.state = ConnectionState::PreConnection;
+                        return Poll::Pending;
+                    }
                 };
                 trace!("connection reading packet {:?}", req);
                 let fut = Box::pin((this.connect_service).call(req));
+                trace!("next state: Some(ConnectionState::ProcessingConnect(fut)");
                 new_state = Some(ConnectionState::ProcessingConnect(fut));
             }
             ConnectionState::ProcessingConnect(mut fut) => {
+                trace!("state: ConnectionState::ProcessingConnect(mut fut)");
                 let connect_service_result = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Pending => {
+                        this.state = ConnectionState::ProcessingConnect(fut);
+                        return Poll::Pending;
+                    }
                 };
 
                 new_state = Some(ConnectionState::ResponseConnect(connect_service_result));
+                trace!("state: new_state = Some(ConnectionState::ResponseConnect(connect_service_result));");
             }
             ConnectionState::ResponseConnect(res) => {
-                trace!("response connect");
+                trace!("state: ConnectionState::ResponseConnect(res)");
                 let connack = res.to_connack();
                 let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
 
@@ -209,41 +220,55 @@ where
                     }
                 }
                 new_state = Some(ConnectionState::ReadingPacket);
+                trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
-                trace!("reading packet");
+                trace!("state: ConnectionState::ReadingPacket");
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
-                        println!("read packet done!!");
+                        trace!("read packet done!!");
                         req
                     }
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => {
+                        trace!("Error");
+                        return Poll::Ready(Err(e));
+                    }
+                    Poll::Pending => {
+                        this.state = ConnectionState::ReadingPacket;
+                        return Poll::Pending;
+                    }
                 };
-                trace!("done!!!!!");
                 if let ControlPacket::DISCONNECT(_) = req.body {
                     // -> DropでClose処理を行う
                     return Poll::Ready(Ok(()));
                 }
                 let fut = Box::pin((this.service).call(req));
+                trace!("state: new_state = Some(ConnectionState::ProcessingService(fut));");
                 new_state = Some(ConnectionState::ProcessingService(fut));
             }
             ConnectionState::ProcessingService(mut fut) => {
-                trace!("processing service");
+                trace!("state: ConnectionState::ProcessingService(mut fut)");
 
                 let response = match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => res, // Response を取得
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(e.into()));
+                    }
+                    Poll::Pending => {
+                        this.state = ConnectionState::ProcessingService(fut);
+                        return Poll::Pending;
+                    }
                 };
                 new_state = Some(ConnectionState::WritingPacket(response));
+                trace!("state: new_state = Some(ConnectionState::WritingPacket(response));");
             }
             ConnectionState::WritingPacket(res) => {
-                trace!("writing packet");
-
+                trace!("state: ConnectionState::WritingPacket(res)");
                 match this.tx.try_send(response::Response::new(res.packet)) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        trace!("success send");
+                    }
                     Err(TrySendError::Full(resp)) => {
                         eprintln!("Channel Full droping response: {:?}", resp);
                     }
@@ -251,11 +276,13 @@ where
                         return Poll::Ready(Err("Channel closed".into()));
                     }
                 }
+                trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
                 new_state = Some(ConnectionState::ReadingPacket);
             }
         }
         if let Some(state) = new_state {
             this.state = state;
+            trace!("state changed: {:?}", std::mem::discriminant(&this.state));
         }
         cx.waker().wake_by_ref();
         Poll::Pending

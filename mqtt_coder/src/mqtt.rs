@@ -2006,6 +2006,9 @@ fn encode_variable_bytes(mut length: usize) -> Vec<u8> {
 #[derive(PartialEq, Debug, Default, Clone)]
 pub struct ClientId(String);
 impl ClientId {
+    pub fn new(str: String) -> Self {
+        Self(str)
+    }
     fn try_from(
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -2018,7 +2021,7 @@ impl ClientId {
          */
         Ok((Self(res), pos))
     }
-    fn into_inner(self) -> String {
+    pub fn into_inner(self) -> String {
         self.0
     }
 }

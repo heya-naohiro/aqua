@@ -1,12 +1,9 @@
+use aqua::ConnackResponse;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
-use aqua::{ConnackError, ConnackResponse};
-use mini_redis::client;
 use mqtt_coder::mqtt::{
-    self, Connack, ControlPacket, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
-    SubscribeOption,
+    self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
 };
-use paho_mqtt::topic;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,7 +11,7 @@ use tokio;
 use tokio::net::TcpListener;
 use topic_manager::TopicManager;
 use tower::service_fn;
-use tracing::{instrument, trace};
+use tracing::trace;
 use tracing_subscriber;
 use uuid::Uuid;
 
@@ -31,32 +28,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_fn(move |incoming: request::IncomingStream| {
             let topic_mgr = Arc::clone(&topic_mgr);
             let peer = incoming.addr;
-            let client_id_opt = incoming.client_id;
+            let mqtt_id = incoming.mqtt_id; //使うのはMQTT IDのみ
             async move {
                 Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
-                    println!("(normal) New connection from: {:?}", peer);
+                    trace!("(normal) New connection from: {:?}", peer);
 
                     let topic_mgr = Arc::clone(&topic_mgr);
-                    let client_id_opt = client_id_opt;
+                    let mqtt_id = mqtt_id.clone();
                     Box::pin(async move {
-                        let client_id: Uuid = if let Some(client_id) = client_id_opt {
-                            client_id
-                        } else {
-                            return Err(mqtt::MqttError::Unexpected);
-                        };
+                        trace!("Client id processing! {:?}", mqtt_id);
 
+                        let mqtt_id = mqtt_id.ok_or(MqttError::Unexpected)?;
                         match req.body {
                             ControlPacket::PINGREQ(_ping) => {
-                                return Ok(response::Response::new(ControlPacket::PINGRESP(
-                                    Pingresp {},
-                                )))
+                                return Ok::<response::Response, MqttError>(
+                                    response::Response::new(ControlPacket::PINGRESP(Pingresp {})),
+                                );
                             }
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 let mut success_codes = vec![];
                                 for (filter, suboption) in subpacket.topic_filters {
                                     trace!("Subscribe Done!! ");
 
-                                    topic_mgr.register(filter.value(), client_id, &suboption);
+                                    topic_mgr.register(filter.value(), mqtt_id.clone(), &suboption);
                                     success_codes.push(SubackReasonCode::from(suboption.qos));
                                 }
                                 return Ok(response::Response::new(ControlPacket::SUBACK({
@@ -75,8 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let Some(topic_name) = pubpacket.topic_name.clone() {
                                         let subed_clients =
                                             topic_mgr.subed_id(topic_name.value().to_string());
-                                        for (sub_id, _optioin) in subed_clients {
-                                            let result = SESSION_MANAGER.send(
+                                        for (sub_id, _option) in subed_clients {
+                                            let result = SESSION_MANAGER.send_by_mqtt_id(
                                                 &sub_id,
                                                 ControlPacket::PUBLISH(pubpacket.clone()),
                                             );
@@ -90,40 +84,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         print!("Pubpacket topic name not found ")
                                     }
                                 });
+                                return Ok(response::Response::default());
                             }
-                            _ => {}
+                            _ => {
+                                return Ok(response::Response::default());
+                            }
                         }
-                        Ok(response::Response::default())
                     })
                 }))
             }
         })
     };
-    let make_connect_service = service_fn(|incoming: request::IncomingStream| async move {
-        Ok::<_, Infallible>(service_fn(|req: request::Request<ControlPacket>| {
-            Box::pin(async move {
-                println!("(connect) Processing request");
-                match req.body {
-                    ControlPacket::CONNECT(_connect_data) => {
-                        // CONNECT パケットを受け取ったとき
-                        let connack_data = Connack {
-                            session_present: false,
-                            connect_reason: mqtt::ConnackReason::Success,
-                            connack_properties: None,
-                            version: ProtocolVersion::new(0x04),
-                        };
-                        let connack_response = ConnackResponse::from(connack_data);
-                        trace!("(connect) Connack response");
-                        Ok(connack_response)
+    let make_connect_service = service_fn(
+        move |mut incoming: request::IncomingStream| async move {
+            Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
+                Box::pin(async move {
+                    println!("(connect) Processing request");
+                    match req.body {
+                        ControlPacket::CONNECT(connect_data) => {
+                            let connack_data = Connack {
+                                session_present: false,
+                                connect_reason: mqtt::ConnackReason::Success,
+                                connack_properties: None,
+                                version: ProtocolVersion::new(0x04),
+                            };
+                            incoming.client_id = Some(Uuid::new_v4()); /* [注意]便宜的に接続のたびにClient IDを割り当てる */
+                            SESSION_MANAGER.register_mqtt_id(
+                                connect_data.client_id.into_inner(),
+                                incoming.client_id.unwrap(),
+                            );
+                            let connack_response = ConnackResponse::from(connack_data);
+                            trace!("(connect) Connack response");
+                            Ok(connack_response)
+                        }
+                        _ => {
+                            println!("(connect) Received non-CONNECT packet");
+                            Ok(ConnackResponse::default())
+                        }
                     }
-                    _ => {
-                        println!("(connect) Received non-CONNECT packet");
-                        Ok(ConnackResponse::default())
-                    }
-                }
-            })
-        }))
-    });
+                })
+            }))
+        },
+    );
     let listener = TcpListener::bind(addr).await?;
     aqua::serve(listener, make_service, make_connect_service).await?;
     Ok(())
@@ -132,10 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub mod topic_manager {
     use dashmap::DashMap;
     use mqtt_coder::mqtt::SubscribeOption;
-    use uuid::Uuid;
 
     pub struct TopicManager {
-        topic_map: DashMap<String, Vec<(Uuid, SubscribeOption)>>,
+        topic_map: DashMap<String, Vec<(String, SubscribeOption)>>,
     }
 
     impl TopicManager {
@@ -144,20 +145,20 @@ pub mod topic_manager {
             Self { topic_map }
         }
 
-        pub fn register(&self, topic_filter: String, client_id: Uuid, option: &SubscribeOption) {
+        pub fn register(&self, topic_filter: String, client_id: String, option: &SubscribeOption) {
             self.topic_map
                 .entry(topic_filter)
                 .or_default()
                 .push((client_id, option.clone()));
         }
 
-        pub fn unregister(&self, topic_filter: String, client_id: Uuid) {
+        pub fn unregister(&self, topic_filter: String, client_id: String) {
             if let Some(mut v) = self.topic_map.get_mut(&topic_filter) {
                 v.retain(|x| x.0 != client_id);
             }
         }
 
-        pub fn subed_id(&self, topic: String) -> Vec<(Uuid, SubscribeOption)> {
+        pub fn subed_id(&self, topic: String) -> Vec<(String, SubscribeOption)> {
             let topic_filters: Vec<_> = self
                 .topic_map
                 .iter()

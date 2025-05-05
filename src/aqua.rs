@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tower_service::Service;
 use tracing::trace;
+use uuid::Uuid;
 
 pub(crate) mod connection;
 
@@ -165,6 +166,7 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: None,
+                        mqtt_id: None,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
@@ -174,6 +176,7 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: None,
+                        mqtt_id: None,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
@@ -182,6 +185,7 @@ where
                         tower_service,
                         tower_connect_service,
                         Arc::<tokio::net::TcpStream>::try_unwrap(arc_tcpstream).unwrap(),
+                        Uuid::new_v4(),
                     );
                     // Connectionをセッションマネージャーに格納
                     // ここまで前処理

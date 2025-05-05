@@ -25,27 +25,63 @@ impl Outbound {
 #[derive(Clone)]
 pub struct SessionManager {
     /* client id : Outbound */
-    inner: Arc<DashMap<Uuid, Outbound>>,
+    by_client_id: Arc<DashMap<Uuid, Outbound>>,
+    by_mqtt_id: Arc<DashMap<String, Uuid>>,
+    by_client_mqtt: Arc<DashMap<Uuid, String>>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         SessionManager {
-            inner: Arc::new(DashMap::new()),
+            by_client_id: Arc::new(DashMap::new()),
+            by_mqtt_id: Arc::new(DashMap::new()),
+            by_client_mqtt: Arc::new(DashMap::new()),
         }
     }
 
-    pub fn register(&self, client_id: Uuid, outbound: Outbound) {
-        self.inner.insert(client_id, outbound);
+    pub fn register_client_id(&self, client_id: Uuid, outbound: Outbound) {
+        self.by_client_id.insert(client_id, outbound);
     }
-    pub fn unregister(&self, client_id: Uuid) {
-        self.inner.remove(&client_id);
+    pub fn unregister_client_id(&self, client_id: Uuid) {
+        self.by_client_id.remove(&client_id);
     }
-    pub fn send(&self, client_id: &Uuid, pkt: ControlPacket) -> Result<(), TrySendError<Response>> {
-        if let Some(outbound) = self.inner.get(client_id) {
+    pub fn send_by_client_id(
+        &self,
+        client_id: &Uuid,
+        pkt: ControlPacket,
+    ) -> Result<(), TrySendError<Response>> {
+        if let Some(outbound) = self.by_client_id.get(client_id) {
             outbound.send(pkt)
         } else {
             Err(TrySendError::Closed(Response::new(pkt)))
         }
+    }
+
+    pub fn send_by_mqtt_id(
+        &self,
+        mqtt_id: &String,
+        pkt: ControlPacket,
+    ) -> Result<(), TrySendError<Response>> {
+        if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
+            let client_id = *value_ref;
+            self.send_by_client_id(&client_id, pkt)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn register_mqtt_id(&self, mqtt_id: String, client_id: Uuid) {
+        self.by_mqtt_id.insert(mqtt_id.clone(), client_id);
+        self.by_client_mqtt.insert(client_id, mqtt_id);
+    }
+    pub fn unregister_mqtt_id(&self, mqtt_id: String) {
+        if let Some((_, client_id)) = self.by_mqtt_id.remove(&mqtt_id) {
+            self.by_client_mqtt.remove(&client_id);
+        }
+    }
+    pub fn get_mqtt_id(&self, client_id: &Uuid) -> Option<String> {
+        self.by_client_mqtt
+            .get(client_id)
+            .map(|r| r.value().clone())
     }
 }
