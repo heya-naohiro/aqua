@@ -266,18 +266,24 @@ where
             }
             ConnectionState::WritingPacket(res) => {
                 trace!("state: ConnectionState::WritingPacket(res)");
-                match this.tx.try_send(response::Response::new(res.packet)) {
-                    Ok(()) => {
-                        trace!("success send");
-                    }
-                    Err(TrySendError::Full(resp)) => {
-                        eprintln!("Channel Full droping response: {:?}", resp);
-                    }
-                    Err(TrySendError::Closed(_)) => {
-                        return Poll::Ready(Err("Channel closed".into()));
+                match res.packet {
+                    ControlPacket::NOOPERATION => {}
+                    _ => {
+                        match this.tx.try_send(response::Response::new(res.packet)) {
+                            Ok(()) => {
+                                trace!("success send");
+                            }
+                            Err(TrySendError::Full(resp)) => {
+                                eprintln!("Channel Full droping response: {:?}", resp);
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                return Poll::Ready(Err("Channel closed".into()));
+                            }
+                        }
+                        trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
                     }
                 }
-                trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+
                 new_state = Some(ConnectionState::ReadingPacket);
             }
         }
@@ -308,18 +314,19 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
-        let mut buf = &mut *this.buffer;
-        let read_buf_res = match poll_read_buf(this.reader, cx, &mut buf) {
+        let read_buf_res = match poll_read_buf(this.reader, cx, this.buffer) {
             Poll::Pending => {
-                println!("poll_read_buf → Pending, buf.len = {}", buf.len());
-                if buf.is_empty() {
+                println!("poll_read_buf → Pending, buf.len = {}", this.buffer.len());
+                if this.buffer.is_empty() {
                     return Poll::Pending;
                 }
                 // bufferにデータが存在する場合はdecodeを試みる
-                let packet = this.decoder.poll_decode(cx, &mut buf);
+                let buf = std::mem::take(this.buffer);
+                let packet = this.decoder.poll_decode(cx, buf);
                 match packet {
-                    Poll::Ready(Ok(control_packet)) => {
+                    Poll::Ready(Ok((control_packet, buf))) => {
                         trace!("ready???");
+                        *this.buffer = buf;
                         let res = Poll::Ready(Ok(Request::new(control_packet)));
                         trace!("res {:?}", res);
 
@@ -329,6 +336,7 @@ where
                         return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
                     }
                     Poll::Pending => {
+                        *this.buffer = buf;
                         return Poll::Pending;
                     }
                 }
@@ -336,15 +344,22 @@ where
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed".into()));
             }
-            Poll::Ready(Ok(_n)) => match this.decoder.poll_decode(cx, &mut buf) {
-                Poll::Ready(Ok(control_packet)) => Poll::Ready(Ok(Request::new(control_packet))),
-                Poll::Ready(Err(e)) => {
-                    return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
+            Poll::Ready(Ok(_n)) => {
+                let buf = std::mem::take(this.buffer);
+                match this.decoder.poll_decode(cx, buf) {
+                    Poll::Ready(Ok((control_packet, buf))) => {
+                        *this.buffer = buf;
+                        Poll::Ready(Ok(Request::new(control_packet)))
+                    }
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
+                    }
+                    Poll::Pending => {
+                        *this.buffer = buf;
+                        return Poll::Pending;
+                    }
                 }
-                Poll::Pending => {
-                    return Poll::Pending;
-                }
-            },
+            }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>)),
         };
         trace!("readbuf return {:?}", read_buf_res);

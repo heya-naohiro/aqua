@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         print!("Pubpacket topic name not found ")
                                     }
                                 });
-                                return Ok(response::Response::default());
+                                return Ok(response::Response::new(ControlPacket::NOOPERATION));
                             }
                             _ => {
                                 return Ok(response::Response::default());

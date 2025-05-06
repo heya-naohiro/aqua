@@ -1,4 +1,4 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use hex::encode;
 use thiserror::Error;
 use tracing::{instrument, trace};
@@ -24,6 +24,7 @@ pub enum ControlPacket {
     PUBLISH(Publish),
     #[default]
     UNDEFINED,
+    NOOPERATION,
     SUBSCRIBE(Subscribe),
     SUBACK(Suback),
     PINGREQ(Pingreq),
@@ -49,10 +50,9 @@ pub trait MqttPacket {
     ) -> Result<usize, MqttError>;
     fn decode_payload(
         &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
+        buf: bytes::BytesMut,
         protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError>;
+    ) -> Result<bytes::BytesMut, MqttError>;
     fn encode_header(&self) -> Result<Bytes, MqttError>;
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError>;
 }
@@ -60,17 +60,16 @@ pub trait MqttPacket {
 impl MqttPacket for ControlPacket {
     fn decode_payload(
         &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
+        buf: bytes::BytesMut,
         protocol_version: Option<ProtocolVersion>
-    ) -> Result<usize, MqttError> {
+    ) -> Result<bytes::BytesMut, MqttError> {
         match self {
-            ControlPacket::CONNECT(p) => p.decode_payload(buf, start_pos, protocol_version),
-            ControlPacket::PUBLISH(p) => p.decode_payload(buf, start_pos, protocol_version),
-            ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, start_pos, protocol_version),
-            ControlPacket::UNSUBSCRIBE(p) => p.decode_payload(buf, start_pos, protocol_version),
-            ControlPacket::PINGREQ(p) => p.decode_payload(buf, start_pos, protocol_version),
-            ControlPacket::PUBREL(p) => p.decode_payload(buf, start_pos, protocol_version),
+            ControlPacket::CONNECT(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::PUBLISH(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::SUBSCRIBE(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::UNSUBSCRIBE(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::PINGREQ(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::PUBREL(p) => p.decode_payload(buf, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -136,11 +135,11 @@ impl Pingreq {
     // NOP
     fn decode_payload(
         &mut self,
-        _buf: &bytes::BytesMut,
-        start_pos: usize,
+        _buf: bytes::BytesMut,
         _protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError> {
-        Ok(start_pos)
+    ) -> Result<bytes::BytesMut, MqttError> {
+        // no payload
+        Ok(_buf)
     }
 }
 
@@ -478,11 +477,11 @@ impl MqttPacket for Unsubscribe {
         
             fn decode_payload(
                 &mut self,
-                buf: &bytes::BytesMut,
-                start_pos: usize,
+                mut buf: bytes::BytesMut,
                 _protocol_version: Option<ProtocolVersion>,
-            ) -> Result<usize, MqttError> {
-                let mut next_pos = start_pos;
+            ) -> Result<bytes::BytesMut, MqttError> {
+                let start_pos = 0;
+                let mut next_pos = 0;
                 loop {
                     if next_pos - start_pos == self.payload_length {
                         break; 
@@ -490,10 +489,11 @@ impl MqttPacket for Unsubscribe {
                         return Err(MqttError::InvalidFormat);
                     }
                     let res;
-                    (res, next_pos) = TopicFilter::try_from(buf, next_pos)?;
+                    (res, next_pos) = TopicFilter::try_from(&buf, next_pos)?;
                     self.topic_filters.push(res);
                 }
-                Ok(next_pos)                 
+                buf.advance(next_pos);
+                Ok(buf)                 
             }
         
             fn encode_header(&self) -> Result<Bytes, MqttError> {
@@ -812,11 +812,11 @@ impl Pubrel {
     }
     fn decode_payload(
         &mut self,
-        _buf: &bytes::BytesMut,
-        _start_pos: usize,
+        buf: bytes::BytesMut,
         _protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError> {
-        Ok(0)
+    ) -> Result<bytes::BytesMut, MqttError> {
+        // no payload
+        Ok(buf)
     }
 }
 
@@ -1136,6 +1136,8 @@ pub struct Publish {
     pub topic_name: Option<TopicName>,
     pub pub_properties: PublishProperties,
     pub packet_id: Option<PacketId>, /* 2byte integer */
+    payload_length: usize,
+    pub payload_data: bytes::Bytes,
 }
 
 #[derive(Debug, PartialEq, Clone, Default)]
@@ -2083,11 +2085,11 @@ impl MqttPacket for Subscribe {
     
     fn decode_payload(
         &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
+        mut buf: bytes::BytesMut,
         _protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError> {
-        let mut next_pos = start_pos;
+    ) -> Result<bytes::BytesMut, MqttError> {
+        let mut next_pos = 0;
+        let start_pos = 0;
         trace!("Decode payload!!!!!!!!!!! subscribe ");
 
         /* guard for default */
@@ -2100,8 +2102,8 @@ impl MqttPacket for Subscribe {
 
             let f: TopicFilter;
             let op: SubscribeOption;
-            (f, next_pos) = TopicFilter::try_from(buf, next_pos)?;
-            (op, next_pos) = SubscribeOption::try_from(buf, next_pos)?;
+            (f, next_pos) = TopicFilter::try_from(&buf, next_pos)?;
+            (op, next_pos) = SubscribeOption::try_from(&buf, next_pos)?;
             self.topic_filters.push((f, op));
 
             
@@ -2112,8 +2114,9 @@ impl MqttPacket for Subscribe {
                 return Err(MqttError::Unexpected);
             }
         }
-        trace!("End");
-        return Ok(next_pos);
+
+        buf.advance(next_pos);
+        return Ok(buf);
     }
     
     fn encode_header(&self) -> Result<Bytes, MqttError> {
@@ -2134,7 +2137,7 @@ impl MqttPacket for Publish {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
-        _remaining_length: usize,
+        remaining_length: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         // topic name UTF-8 Encoded String
@@ -2237,16 +2240,22 @@ impl MqttPacket for Publish {
                 }
             }
         }
+        /* 3(start_pos) 4 5 6 7(next_pos)*/
+        self.payload_length = remaining_length - (next_pos - start_pos) /* vari header len */;
         return Ok(next_pos);
     }
 
     fn decode_payload(
         &mut self,
-        _buf: &bytes::BytesMut,
-        _start_pos: usize,
+        mut buf: bytes::BytesMut,
         _protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError> {
-        Ok(0)
+    ) -> Result<bytes::BytesMut, MqttError> {
+        if buf.len() < self.payload_length {
+            return Err(MqttError::InsufficientBytes);
+        }
+        let res = buf.split_off(self.payload_length);
+        self.payload_data = buf.freeze();
+        Ok(res)
     }
     // [TODO]
     fn encode_header(&self) -> Result<Bytes, MqttError> {
@@ -2382,20 +2391,20 @@ impl MqttPacket for Connect {
 
     fn decode_payload(
         &mut self,
-        buf: &bytes::BytesMut,
-        start_pos: usize,
+        mut buf: bytes::BytesMut,
         _protocol_version: Option<ProtocolVersion>,
-    ) -> Result<usize, MqttError> {
+    ) -> Result<bytes::BytesMut, MqttError> {
         // Client Identifier(MUST)
         let mut next_pos;
+        let start_pos = 0;
         trace!("Decode payload connect!! {:?}", &buf);
-        (self.client_id, next_pos) = ClientId::try_from(buf, start_pos)?;
+        (self.client_id, next_pos) = ClientId::try_from(&buf, start_pos)?;
         if self.connect_flags.will_flag {
             // Will Properties
             // properties length
 
             let will_property_length;
-            (will_property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            (will_property_length, next_pos) = decode_variable_length(&buf, next_pos)?;
             let end_pos = next_pos + will_property_length;
 
             loop {
@@ -2411,7 +2420,7 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let ret;
-                        (ret, next_pos) = WillDelayInterval::try_from(buf, next_pos + 1)?;
+                        (ret, next_pos) = WillDelayInterval::try_from(&buf, next_pos + 1)?;
                         self.will_properties.will_delay_interval = Some(ret);
                     }
                     PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
@@ -2419,7 +2428,7 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let ret;
-                        (ret, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
+                        (ret, next_pos) = PayloadFormatIndicator::try_from(&buf, next_pos + 1)?;
                         self.will_properties.payload_format_indicator = Some(ret);
                     }
                     PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
@@ -2427,7 +2436,7 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let ret;
-                        (ret, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
+                        (ret, next_pos) = MessageExpiryInterval::try_from(&buf, next_pos + 1)?;
                         self.will_properties.message_expiry_interval = Some(ret);
                     }
                     PROPERTY_CONTENT_TYPE_ID => {
@@ -2435,7 +2444,7 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let ret;
-                        (ret, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
+                        (ret, next_pos) = ContentType::try_from(&buf, next_pos + 1)?;
                         self.will_properties.content_type = Some(ret);
                     }
                     PROPERTY_RESPONSE_TOPIC_ID => {
@@ -2443,7 +2452,7 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let ret;
-                        (ret, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
+                        (ret, next_pos) = ResponseTopic::try_from(&buf, next_pos + 1)?;
                         self.will_properties.response_topic = Some(ret);
                     }
                     PROPERTY_CORRELATION_DATA_ID => {
@@ -2452,12 +2461,12 @@ impl MqttPacket for Connect {
                             return Err(MqttError::InvalidFormat);
                         }
                         let result;
-                        (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
+                        (result, next_pos) = CorrelationData::try_from(&buf, next_pos + 1)?;
                         self.will_properties.correlation_data = Some(result);
                     }
                     PROPERTY_USER_PROPERTY_ID => {
                         let user_property;
-                        (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                        (user_property, next_pos) = UserProperty::try_from(&buf, next_pos + 1)?;
                         // 所有権を奪わずに変更する。
                         self.will_properties
                             .user_properties
@@ -2471,29 +2480,30 @@ impl MqttPacket for Connect {
             }
             // Will Topic
             let ret;
-            (ret, next_pos) = TopicName::try_from(buf, next_pos)?;
+            (ret, next_pos) = TopicName::try_from(&buf, next_pos)?;
             self.will_topic = Some(ret);
             // Will Payload
             let ret;
-            (ret, next_pos) = WillPayload::try_from(buf, next_pos)?;
+            (ret, next_pos) = WillPayload::try_from(&buf, next_pos)?;
             self.will_payload = Some(ret);
         }
 
         // User Name
         if self.connect_flags.user_name_flag {
             let ret;
-            (ret, next_pos) = UserName::try_from(buf, next_pos)?;
+            (ret, next_pos) = UserName::try_from(&buf, next_pos)?;
 
             self.username = Some(ret);
         }
         // Password
         if self.connect_flags.password_flag {
             let ret;
-            (ret, next_pos) = Password::try_from(buf, next_pos)?;
+            (ret, next_pos) = Password::try_from(&buf, next_pos)?;
             self.password = Some(ret);
         }
 
-        return Ok(next_pos);
+        buf.advance(next_pos);
+        return Ok(buf);
     }
     fn encode_header(&self) -> Result<Bytes, MqttError> {
         todo!()
@@ -2677,7 +2687,7 @@ mod tests {
             println!("variable {}", next_pos);
             b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = connect.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(connect.client_id.into_inner(), "publish-549".to_string());
         } else {
@@ -2698,7 +2708,7 @@ mod tests {
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             let consumed = ret.unwrap();
             b.advance(consumed);
-            publish.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5))).is_ok();
+            publish.decode_payload(b, Some(mqtt::ProtocolVersion(5))).is_ok();
             assert_eq!(publish.qos, QoS::QoS1);
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
@@ -2772,7 +2782,7 @@ mod tests {
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             let consumed = ret.unwrap();
             b.advance(consumed);
-            let _res = publish.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let _res = publish.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert_eq!(publish.qos, QoS::QoS1);
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
@@ -2843,7 +2853,7 @@ mod tests {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
 
-            let res = connect.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = connect.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(
                 connect.client_id.clone().into_inner(),
@@ -3020,7 +3030,7 @@ fn mqtt5_subscribe_parse() {
         let next_pos = ret.unwrap();
         b.advance(next_pos);
 
-        let res = subscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        let res = subscribe.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
         assert!(res.is_ok());
         /*
         #[derive(PartialEq, Debug, Default)]
@@ -3068,7 +3078,7 @@ fn mqtt5_subscribe_full_parse() {
         let next_pos = ret.unwrap();
         b.advance(next_pos);
 
-        let res = subscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+        let res = subscribe.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
         assert!(res.is_ok());
         assert_eq!(subscribe.packet_id, PacketId(2));
         assert_eq!(subscribe.topic_filters[0].0, TopicFilter("topic/test/qos1".to_string()));
@@ -3129,7 +3139,7 @@ fn mqtt5_subscribe_full_parse() {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
     
-            let res = unsubscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = unsubscribe.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(unsubscribe.packet_id.value(), 4);
             assert_eq!(unsubscribe.topic_filters,
@@ -3164,7 +3174,7 @@ fn mqtt5_subscribe_full_parse() {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
     
-            let res = unsubscribe.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = unsubscribe.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
             assert_eq!(unsubscribe.packet_id.value(), 4);
             assert_eq!(unsubscribe.topic_filters,
@@ -3371,7 +3381,7 @@ fn mqtt5_subscribe_full_parse() {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
     
-            let res = pubrel.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = pubrel.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
 
             assert_eq!(pubrel.packet_id.value(), 1);
@@ -3393,7 +3403,7 @@ fn mqtt5_subscribe_full_parse() {
             let next_pos = ret.unwrap();
             b.advance(next_pos);
     
-            let res = pubrel.decode_payload(&b, 0, Some(mqtt::ProtocolVersion(5)));
+            let res = pubrel.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
             assert!(res.is_ok());
 
             assert_eq!(pubrel.packet_id.value(), 0x1234);
