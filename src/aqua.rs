@@ -161,11 +161,13 @@ where
                     .unwrap_or_else(|err| match err {});
                 let arc_tcpstream = Arc::new(tcp_stream);
 
+                let generated_id = Uuid::new_v4();
+
                 let tower_service = make_service
                     .call(connection::request::IncomingStream {
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
-                        client_id: None,
+                        client_id: generated_id,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
@@ -174,7 +176,7 @@ where
                     .call(connection::request::IncomingStream {
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
-                        client_id: None,
+                        client_id: generated_id,
                     })
                     .await
                     .unwrap_or_else(|err| match err {});

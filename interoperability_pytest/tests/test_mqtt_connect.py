@@ -9,7 +9,7 @@ class TestMqttConnect:
         self.connected = False
         self.recieved_messages = []
 
-        self.client = mqtt.Client()
+        self.client = mqtt.Client(client_id="helloclient")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
     
@@ -47,10 +47,12 @@ class TestMqttConnect:
 
         print(" ^^^^^^^ subscribe ^^^^^^")
         self.client.subscribe("test/topic")
-        time.sleep(10)
+        time.sleep(1)
         print(" ^^^^^^^ subscribe done ^^^^^^")
 
+        print(" ^^^^^^^ publish ^^^^^^")
         self.client.publish("test/topic", "Hello MQTT")
         time.sleep(0.5)
+        print(" ^^^^^^^ publish done ^^^^^^")
 
         assert "Hello MQTT" in self.recieved_messages, "Subscribe でメッセージを受信できませんでした"

@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
     let topic_mgr = Arc::new(TopicManager::new());
+
     let make_service = {
         let topic_mgr = Arc::clone(&topic_mgr);
         service_fn(move |incoming: request::IncomingStream| {
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 let mut success_codes = vec![];
                                 if let Some(mqtt_id) =
-                                    SESSION_MANAGER.get_mqtt_id(&incoming.client_id.unwrap())
+                                    SESSION_MANAGER.get_mqtt_id(&incoming.client_id)
                                 {
                                     for (filter, suboption) in subpacket.topic_filters {
                                         trace!("Subscribe Done!! ");
@@ -94,8 +95,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     };
-    let make_connect_service = service_fn(
-        move |mut incoming: request::IncomingStream| async move {
+    let make_connect_service =
+        service_fn(move |mut incoming: request::IncomingStream| async move {
             Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
                 Box::pin(async move {
                     println!("(connect) Processing request");
@@ -107,10 +108,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 connack_properties: None,
                                 version: ProtocolVersion::new(0x04),
                             };
-                            incoming.client_id = Some(Uuid::new_v4()); /* [注意]便宜的に接続のたびにClient IDを割り当てる */
                             SESSION_MANAGER.register_mqtt_id(
                                 connect_data.client_id.into_inner(),
-                                incoming.client_id.unwrap(),
+                                incoming.client_id,
                             );
                             let connack_response = ConnackResponse::from(connack_data);
                             trace!("(connect) Connack response");
@@ -123,8 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 })
             }))
-        },
-    );
+        });
     let listener = TcpListener::bind(addr).await?;
     aqua::serve(listener, make_service, make_connect_service).await?;
     Ok(())

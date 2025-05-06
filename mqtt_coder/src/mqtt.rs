@@ -2385,6 +2385,7 @@ impl MqttPacket for Connect {
     ) -> Result<usize, MqttError> {
         // Client Identifier(MUST)
         let mut next_pos;
+        trace!("Decode payload connect!! {:?}", &buf);
         (self.client_id, next_pos) = ClientId::try_from(buf, start_pos)?;
         if self.connect_flags.will_flag {
             // Will Properties

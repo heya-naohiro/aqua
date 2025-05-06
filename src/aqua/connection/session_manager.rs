@@ -4,6 +4,7 @@ use mqtt_coder::mqtt::ControlPacket;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use tracing::trace;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -71,6 +72,7 @@ impl SessionManager {
     }
 
     pub fn register_mqtt_id(&self, mqtt_id: String, client_id: Uuid) {
+        trace!("register_mqtt_id {:?} {:?}", mqtt_id, client_id);
         self.by_mqtt_id.insert(mqtt_id.clone(), client_id);
         self.by_client_mqtt.insert(client_id, mqtt_id);
     }
