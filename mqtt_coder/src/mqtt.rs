@@ -2135,9 +2135,10 @@ impl MqttPacket for Publish {
         buf: &bytes::BytesMut,
         start_pos: usize,
         _remaining_length: usize,
-        _protocol_version: Option<ProtocolVersion>,
+        protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         // topic name UTF-8 Encoded String
+        trace!("publish decode variable header {:?}", &buf);
         let (result, mut next_pos) = TopicName::try_from(buf, start_pos)?;
         self.topic_name = Some(result);
         // packet identifier
@@ -2152,85 +2153,87 @@ impl MqttPacket for Publish {
             self.packet_id = Some(result);
         }
         // Properties
-        let property_length;
+        if protocol_version.unwrap().value() >= 0x05 {
+            let property_length;
+            (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
 
-        (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
-
-        // 9 | 10 11 12 13 14 | [ ]
-        let end_pos = next_pos + property_length;
-        loop {
-            if next_pos == end_pos {
-                break;
-            }
-            if next_pos > end_pos {
-                return Err(MqttError::InvalidFormat);
-            }
-            match buf[next_pos] {
-                PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
-                    let result;
-                    (result, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.payload_format_indicator = Some(result);
+            // 9 | 10 11 12 13 14 | [ ]
+            let end_pos = next_pos + property_length;
+            
+            loop {
+                if next_pos == end_pos {
+                    break;
                 }
-                PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
-                    let result;
-                    (result, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.message_expiry_interval = Some(result);
-                }
-                PROPERTY_TOPIC_ALIAS_ID => {
-                    // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.topic_alias != None {
-                        return Err(MqttError::InvalidFormat);
-                    }
-                    let result;
-                    (result, next_pos) = TopicAlias::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.topic_alias = Some(result);
-                }
-                PROPERTY_RESPONSE_TOPIC_ID => {
-                    // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.response_topic != None {
-                        return Err(MqttError::InvalidFormat);
-                    }
-                    let result;
-                    (result, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.response_topic = Some(result);
-                }
-                PROPERTY_CORRELATION_DATA_ID => {
-                    // It is a Protocol Error to include the Topic Alias value more than once.
-                    if self.pub_properties.correlation_data != None {
-                        return Err(MqttError::InvalidFormat);
-                    }
-                    let result;
-                    (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.correlation_data = Some(result);
-                }
-                PROPERTY_USER_PROPERTY_ID => {
-                    let user_property;
-                    (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
-                    // 所有権を奪わずに変更する。
-                    self.pub_properties
-                        .user_properties
-                        .get_or_insert_with(Vec::new)
-                        .push(user_property);
-                }
-                PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
-                    let result;
-                    (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                    self.pub_properties
-                        .subscription_identifier
-                        .get_or_insert_with(Vec::new)
-                        .push(result);
-                }
-                PROPERTY_CONTENT_TYPE_ID => {
-                    // It is a Protocol Error to include the Content Type more than once.
-                    if self.pub_properties.content_type != None {
-                        return Err(MqttError::InvalidFormat);
-                    }
-                    let result;
-                    (result, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
-                    self.pub_properties.content_type = Some(result);
-                }
-                _ => {
+                if next_pos > end_pos {
                     return Err(MqttError::InvalidFormat);
+                }
+                match buf[next_pos] {
+                    PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
+                        let result;
+                        (result, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.payload_format_indicator = Some(result);
+                    }
+                    PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
+                        let result;
+                        (result, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.message_expiry_interval = Some(result);
+                    }
+                    PROPERTY_TOPIC_ALIAS_ID => {
+                        // It is a Protocol Error to include the Topic Alias value more than once.
+                        if self.pub_properties.topic_alias != None {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = TopicAlias::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.topic_alias = Some(result);
+                    }
+                    PROPERTY_RESPONSE_TOPIC_ID => {
+                        // It is a Protocol Error to include the Topic Alias value more than once.
+                        if self.pub_properties.response_topic != None {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.response_topic = Some(result);
+                    }
+                    PROPERTY_CORRELATION_DATA_ID => {
+                        // It is a Protocol Error to include the Topic Alias value more than once.
+                        if self.pub_properties.correlation_data != None {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.correlation_data = Some(result);
+                    }
+                    PROPERTY_USER_PROPERTY_ID => {
+                        let user_property;
+                        (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                        // 所有権を奪わずに変更する。
+                        self.pub_properties
+                            .user_properties
+                            .get_or_insert_with(Vec::new)
+                            .push(user_property);
+                    }
+                    PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
+                        let result;
+                        (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
+                        self.pub_properties
+                            .subscription_identifier
+                            .get_or_insert_with(Vec::new)
+                            .push(result);
+                    }
+                    PROPERTY_CONTENT_TYPE_ID => {
+                        // It is a Protocol Error to include the Content Type more than once.
+                        if self.pub_properties.content_type != None {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
+                        self.pub_properties.content_type = Some(result);
+                    }
+                    _ => {
+                        return Err(MqttError::InvalidFormat);
+                    }
                 }
             }
         }
@@ -2512,6 +2515,8 @@ impl Disconnect {
 }
 
 pub mod decoder {
+    use tracing::trace;
+
     use super::{
         decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, ProtocolVersion, Publish, Pubrel, Subscribe
     };
@@ -2544,6 +2549,9 @@ pub mod decoder {
             // PUBLISH
             0b0011 => {
                 let (dup, qos, retain) = decode_lower_fixed_header(buf, start_pos)?;
+                trace!("Buf (hex): {}", buf.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" "));
+                trace!("QoS: {:?}, start_pos: {}", qos, start_pos);
+
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
                 return Ok((
                     ControlPacket::PUBLISH(Publish {

@@ -121,6 +121,7 @@ where
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
+                        trace!("Encode error: {:?}", &packet);
                         eprintln!("Encode error: {:?}", e);
                         return;
                     }
