@@ -17,6 +17,7 @@ pub struct Decoder {
     tmp_packet: ControlPacket,
     protocol_version: Option<mqtt::ProtocolVersion>,
     remaining_length: usize,
+    pub buf: BytesMut,
 }
 
 impl Decoder {
@@ -26,6 +27,7 @@ impl Decoder {
             tmp_packet: ControlPacket::UNDEFINED,
             protocol_version: None,
             remaining_length: 0,
+            buf: BytesMut::new(),
         }
     }
 
@@ -33,12 +35,8 @@ impl Decoder {
         self.protocol_version = v;
     }
 
-    pub fn poll_decode(
-        &mut self,
-        cx: &mut Context<'_>,
-        mut buf: BytesMut,
-    ) -> Poll<Result<(ControlPacket, BytesMut), (MqttError, BytesMut)>> {
-        if buf.is_empty() {
+    pub fn poll_decode(&mut self, cx: &mut Context<'_>) -> Poll<Result<ControlPacket, MqttError>> {
+        if self.buf.is_empty() {
             return Poll::Pending;
         }
         match &mut self.state {
@@ -48,17 +46,17 @@ impl Decoder {
                 // decode fixed header
                 // packetは状態が変わるとムーブする、性能面で気になる場合はBox<ControlPacket>に変更する
                 // [TODO] 後ほどの最適化でString->&strへの変更も 含めて？やる！！
-                match mqtt::decoder::decode_fixed_header(&buf, 0, self.protocol_version) {
+                match mqtt::decoder::decode_fixed_header(&self.buf, 0, self.protocol_version) {
                     Ok(result) => {
                         let next_pos;
                         (self.tmp_packet, next_pos, self.remaining_length) = result;
-                        buf.advance(next_pos);
+                        self.buf.advance(next_pos);
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::FixedHeaderDecoded;
-                        return Poll::Pending(buf);
+                        return Poll::Pending;
                     }
                     Err(err) => {
-                        trace!("fixed header decode error {:?}", &buf);
+                        trace!("fixed header decode error {:?}", &self.buf);
                         return Poll::Ready(Err(err));
                     }
                 }
@@ -68,13 +66,13 @@ impl Decoder {
 
                 // decode variable header
                 match self.tmp_packet.decode_variable_header(
-                    &buf,
+                    &self.buf,
                     0,
                     self.remaining_length,
                     self.protocol_version,
                 ) {
                     Ok(size) => {
-                        buf.advance(size);
+                        self.buf.advance(size);
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::VariableHeaderDecoded;
                         return Poll::Pending;
@@ -87,12 +85,14 @@ impl Decoder {
             DecoderState::VariableHeaderDecoded => {
                 trace!("DecoderState::VariableHeaderDecoded");
                 // decode payload
+                let buf = std::mem::take(&mut self.buf);
                 match self.tmp_packet.decode_payload(buf, self.protocol_version) {
-                    Ok(buf) => {
+                    Ok(remaining_buf) => {
                         trace!("DecoderState::VariableHeaderDecoded");
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::Done;
-                        return Poll::Ready(Ok((std::mem::take(&mut self.tmp_packet), buf)));
+                        self.buf = remaining_buf;
+                        return Poll::Ready(Ok(std::mem::take(&mut self.tmp_packet)));
                     }
                     Err(err) => {
                         return Poll::Ready(Err(err));

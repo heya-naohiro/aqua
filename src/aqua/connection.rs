@@ -54,7 +54,6 @@ where
     tx: mpsc::Sender<Response>,
     write_task: JoinHandle<()>,
     state: ConnectionState<S::Future, CS::Future>,
-    buffer: BytesMut,
     write_buffer: BytesMut,
     decoder: decoder::Decoder,
     encoder: encoder::Encoder,
@@ -102,7 +101,6 @@ where
             tx,
             write_task,
             state: ConnectionState::PreConnection,
-            buffer: BytesMut::with_capacity(BUFFER_CAPACITY), /* [TODO] limit */
             write_buffer: BytesMut::new(),
             decoder: decoder::Decoder::new(),
             encoder: encoder::Encoder::new(),
@@ -314,55 +312,27 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
-        let read_buf_res = match poll_read_buf(this.reader, cx, this.buffer) {
-            Poll::Pending => {
-                println!("poll_read_buf → Pending, buf.len = {}", this.buffer.len());
-                if this.buffer.is_empty() {
-                    return Poll::Pending;
-                }
-                // bufferにデータが存在する場合はdecodeを試みる
-                let buf = std::mem::take(this.buffer);
-                let packet = this.decoder.poll_decode(cx, buf);
-                match packet {
-                    Poll::Ready(Ok((control_packet, buf))) => {
-                        trace!("ready???");
-                        *this.buffer = buf;
-                        let res = Poll::Ready(Ok(Request::new(control_packet)));
-                        trace!("res {:?}", res);
-
-                        res
-                    }
-                    Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
-                    }
-                    Poll::Pending => {
-                        *this.buffer = buf;
-                        return Poll::Pending;
-                    }
-                }
-            }
+        match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed".into()));
             }
             Poll::Ready(Ok(_n)) => {
-                let buf = std::mem::take(this.buffer);
-                match this.decoder.poll_decode(cx, buf) {
-                    Poll::Ready(Ok((control_packet, buf))) => {
-                        *this.buffer = buf;
-                        Poll::Ready(Ok(Request::new(control_packet)))
-                    }
-                    Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>))
-                    }
-                    Poll::Pending => {
-                        *this.buffer = buf;
-                        return Poll::Pending;
-                    }
-                }
+                // fallthrough
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e) as Box<dyn std::error::Error>)),
-        };
-        trace!("readbuf return {:?}", read_buf_res);
-        return read_buf_res;
+            Poll::Ready(Err(e)) => {
+                return Poll::Ready(Err(Box::new(e)));
+            }
+            Poll::Pending => {
+                // fallthrough
+            }
+        }
+        match this.decoder.poll_decode(cx) {
+            Poll::Ready(Ok(p)) => {
+                trace!("decode packet {:?}", p);
+                Poll::Ready(Ok(Request::new(p)))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
