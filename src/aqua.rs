@@ -2,7 +2,7 @@
 // 参考
 // Listener関連
 // https://github.com/tokio-rs/axum/blob/main/axum/src/serve/listener.rs#L9
-use mqtt_coder::mqtt::ControlPacket;
+use mqtt_coder::mqtt::{self, ControlPacket};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{poll_fn, IntoFuture};
@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 use tower_service::Service;
 use tracing::trace;
 use uuid::Uuid;
@@ -160,7 +161,7 @@ where
                     .await
                     .unwrap_or_else(|err| match err {});
                 let arc_tcpstream = Arc::new(tcp_stream);
-
+                let mqtt_id = Arc::new(RwLock::new("".to_string()));
                 let generated_id = Uuid::new_v4();
 
                 let tower_service = make_service
@@ -168,6 +169,7 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: generated_id,
+                        mqtt_id: mqtt_id.clone(),
                     })
                     .await
                     .unwrap_or_else(|err| match err {});
@@ -177,6 +179,7 @@ where
                         tcp_stream: arc_tcpstream.clone(),
                         addr: remote_addr,
                         client_id: generated_id,
+                        mqtt_id: mqtt_id.clone(),
                     })
                     .await
                     .unwrap_or_else(|err| match err {});

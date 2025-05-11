@@ -6,6 +6,7 @@ use mqtt_coder::mqtt::{
 };
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::os::unix::raw::ino_t;
 use std::sync::Arc;
 use tokio;
 use tokio::net::TcpListener;
@@ -13,7 +14,6 @@ use topic_manager::TopicManager;
 use tower::service_fn;
 use tracing::trace;
 use tracing_subscriber;
-use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,14 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let topic_mgr = Arc::new(TopicManager::new());
 
     let make_service = {
-        let topic_mgr = Arc::clone(&topic_mgr);
         service_fn(move |incoming: request::IncomingStream| {
             let topic_mgr = Arc::clone(&topic_mgr);
+            let mqtt_id_lock = incoming.mqtt_id.clone();
             let peer = incoming.addr;
             async move {
                 Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
                     trace!("(normal) New connection from: {:?}", peer);
-
+                    let mqtt_id_lock = mqtt_id_lock.clone();
                     let topic_mgr = Arc::clone(&topic_mgr);
                     Box::pin(async move {
                         match req.body {
@@ -43,9 +43,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 let mut success_codes = vec![];
-                                if let Some(mqtt_id) =
-                                    SESSION_MANAGER.get_mqtt_id(&incoming.client_id)
-                                {
+                                let guard = mqtt_id_lock.read().await;
+                                let mqtt_id: String = guard.clone();
+                                if mqtt_id != "".to_string() {
+                                    SESSION_MANAGER.register_mqtt_id(
+                                        mqtt_id.clone(),
+                                        incoming.client_id.clone(),
+                                    );
                                     for (filter, suboption) in subpacket.topic_filters {
                                         trace!("Subscribe Done!! ");
                                         topic_mgr.register(filter.value(), &mqtt_id, &suboption);
@@ -95,35 +99,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     };
-    let make_connect_service =
-        service_fn(move |mut incoming: request::IncomingStream| async move {
-            Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
-                Box::pin(async move {
-                    println!("(connect) Processing request");
-                    match req.body {
-                        ControlPacket::CONNECT(connect_data) => {
-                            let connack_data = Connack {
-                                session_present: false,
-                                connect_reason: mqtt::ConnackReason::Success,
-                                connack_properties: None,
-                                version: ProtocolVersion::new(0x04),
-                            };
-                            SESSION_MANAGER.register_mqtt_id(
-                                connect_data.client_id.into_inner(),
-                                incoming.client_id,
-                            );
-                            let connack_response = ConnackResponse::from(connack_data);
-                            trace!("(connect) Connack response");
-                            Ok(connack_response)
+    let make_connect_service = service_fn(move |incoming: request::IncomingStream| async move {
+        let mqtt_id_lock = incoming.mqtt_id.clone();
+        Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
+            let mqtt_id_lock = mqtt_id_lock.clone();
+            Box::pin(async move {
+                println!("(connect) Processing request");
+                match req.body {
+                    ControlPacket::CONNECT(connect_data) => {
+                        let connack_data = Connack {
+                            session_present: false,
+                            connect_reason: mqtt::ConnackReason::Success,
+                            connack_properties: None,
+                            version: ProtocolVersion::new(0x04),
+                        };
+                        let client_id: String = connect_data.client_id.clone().into_inner();
+                        {
+                            let mut guard = mqtt_id_lock.write().await;
+                            *guard = client_id.clone();
                         }
-                        _ => {
-                            println!("(connect) Received non-CONNECT packet");
-                            Ok(ConnackResponse::default())
-                        }
+                        let connack_response = ConnackResponse::from(connack_data);
+                        trace!("(connect) Connack response");
+                        Ok(connack_response)
                     }
-                })
-            }))
-        });
+                    _ => {
+                        println!("(connect) Received non-CONNECT packet");
+                        Ok(ConnackResponse::default())
+                    }
+                }
+            })
+        }))
+    });
     let listener = TcpListener::bind(addr).await?;
     aqua::serve(listener, make_service, make_connect_service).await?;
     Ok(())

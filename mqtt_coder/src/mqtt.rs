@@ -1,7 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use hex::encode;
 use thiserror::Error;
-use tracing::{instrument, trace};
+use tracing::trace;
 
 use crate::mqtt;
 #[derive(Debug, Error)]

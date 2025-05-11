@@ -7,7 +7,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tracing::trace;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Outbound {
     tx: mpsc::Sender<Response>,
 }
@@ -41,9 +41,11 @@ impl SessionManager {
     }
 
     pub fn register_client_id(&self, client_id: Uuid, outbound: Outbound) {
+        trace!("register_client_id {:?}", client_id);
         self.by_client_id.insert(client_id, outbound);
     }
     pub fn unregister_client_id(&self, client_id: Uuid) {
+        trace!("unregister_client_id {:?}", client_id);
         self.by_client_id.remove(&client_id);
     }
     pub fn send_by_client_id(
@@ -51,6 +53,7 @@ impl SessionManager {
         client_id: &Uuid,
         pkt: ControlPacket,
     ) -> Result<(), TrySendError<Response>> {
+        trace!("sent_by_client_id {:?}", client_id);
         if let Some(outbound) = self.by_client_id.get(client_id) {
             outbound.send(pkt)
         } else {
@@ -63,6 +66,9 @@ impl SessionManager {
         mqtt_id: &String,
         pkt: ControlPacket,
     ) -> Result<(), TrySendError<Response>> {
+        trace!("sent_by_mqtt_id {:?}", mqtt_id);
+        trace!("client_id map  {:?}", self.by_client_id);
+        trace!("mqtt_id map  {:?}", self.by_client_mqtt);
         if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
             let client_id = *value_ref;
             self.send_by_client_id(&client_id, pkt)
