@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use bytes::{Buf, BytesMut};
 
 use crate::mqtt::{self, ControlPacket, MqttError, MqttPacket};
-use tracing::{instrument, trace};
+use tracing::trace;
 
 #[derive(Debug)]
 enum DecoderState {

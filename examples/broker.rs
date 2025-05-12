@@ -6,7 +6,6 @@ use mqtt_coder::mqtt::{
 };
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::os::unix::raw::ino_t;
 use std::sync::Arc;
 use tokio;
 use tokio::net::TcpListener;
@@ -46,10 +45,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let guard = mqtt_id_lock.read().await;
                                 let mqtt_id: String = guard.clone();
                                 if mqtt_id != "".to_string() {
-                                    SESSION_MANAGER.register_mqtt_id(
-                                        mqtt_id.clone(),
-                                        incoming.client_id.clone(),
-                                    );
                                     for (filter, suboption) in subpacket.topic_filters {
                                         trace!("Subscribe Done!! ");
                                         topic_mgr.register(filter.value(), &mqtt_id, &suboption);
@@ -118,6 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut guard = mqtt_id_lock.write().await;
                             *guard = client_id.clone();
                         }
+                        trace!(
+                            "========== register {:?}, {:?}",
+                            client_id.clone(),
+                            incoming.client_id.clone()
+                        );
+                        SESSION_MANAGER
+                            .register_mqtt_id(client_id.clone(), incoming.client_id.clone());
                         let connack_response = ConnackResponse::from(connack_data);
                         trace!("(connect) Connack response");
                         Ok(connack_response)

@@ -90,9 +90,12 @@ where
         let write_task = Self::spawn_writer(writer, rx);
 
         let outbound = session_manager::Outbound::new(tx.clone());
-
+        //trace!("new connection, register_client_id {:?}", client_id);
         SESSION_MANAGER.register_client_id(client_id, outbound);
-
+        eprintln!(
+            "=== Connection::new() called with client_id {:?}",
+            client_id
+        );
         Connection {
             client_id,
             service,
@@ -314,7 +317,7 @@ where
         let this = self.project();
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
-                return Poll::Ready(Err("Connection closed".into()));
+                return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
             }
             Poll::Ready(Ok(_n)) => {
                 // fallthrough

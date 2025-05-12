@@ -71,8 +71,10 @@ impl SessionManager {
         trace!("mqtt_id map  {:?}", self.by_client_mqtt);
         if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
             let client_id = *value_ref;
+            trace!("send, client_id {:?}", client_id);
             self.send_by_client_id(&client_id, pkt)
         } else {
+            trace!("cannot send anything");
             Ok(())
         }
     }

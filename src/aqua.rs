@@ -163,7 +163,7 @@ where
                 let arc_tcpstream = Arc::new(tcp_stream);
                 let mqtt_id = Arc::new(RwLock::new("".to_string()));
                 let generated_id = Uuid::new_v4();
-
+                trace!("======= generated_id {:?}", generated_id);
                 let tower_service = make_service
                     .call(connection::request::IncomingStream {
                         tcp_stream: arc_tcpstream.clone(),
@@ -188,7 +188,7 @@ where
                         tower_service,
                         tower_connect_service,
                         Arc::<tokio::net::TcpStream>::try_unwrap(arc_tcpstream).unwrap(),
-                        Uuid::new_v4(),
+                        generated_id,
                     );
                     // Connectionをセッションマネージャーに格納
                     // ここまで前処理
