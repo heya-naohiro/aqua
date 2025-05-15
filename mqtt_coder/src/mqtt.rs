@@ -97,6 +97,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::PUBREC(p) => p.encode_header(),
             ControlPacket::PUBCOMP(p) => p.encode_header(),
             ControlPacket::UNSUBACK(p) => p.encode_header(),
+            ControlPacket::PUBLISH(p) => p.encode_header(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -110,6 +111,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::PUBREC(p) => p.encode_payload_chunk(),
             ControlPacket::PUBCOMP(p) => p.encode_payload_chunk(),
             ControlPacket::UNSUBACK(p) => p.encode_payload_chunk(),
+            ControlPacket::PUBLISH(p) => p.encode_payload_chunk(),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -1132,11 +1134,12 @@ pub struct Publish {
     pub dup: Dup,
     pub qos: QoS,
     pub retain: Retain,
-    pub topic_name: Option<TopicName>,
-    pub pub_properties: PublishProperties,
+    pub topic_name: TopicName,
+    pub pub_properties: Option<PublishProperties>,
     pub packet_id: Option<PacketId>, /* 2byte integer */
     payload_length: usize,
     pub payload_data: bytes::Bytes,
+    pub protocol_version: ProtocolVersion,
 }
 
 #[derive(Debug, PartialEq, Clone, Default)]
@@ -1306,7 +1309,7 @@ fn decode_lower_fixed_header(
     ))
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default, Copy)]
 pub struct TopicName(String); // variable header
 
 impl TopicName {
@@ -1319,6 +1322,10 @@ impl TopicName {
     }
     pub fn value(self) -> String {
         self.0
+    }
+
+    pub fn len(self) -> usize {
+        self.0.len()
     }
 }
 
@@ -1336,6 +1343,10 @@ impl PacketId {
     }
     pub fn value(&self) -> u16 {
         self.0
+    }
+
+    pub fn len(&self) -> usize {
+        2 /* bytes */
     }
 }
 
@@ -1378,6 +1389,61 @@ pub struct PublishProperties {
     content_type: Option<ContentType>,
 }
 
+impl PublishProperties {
+    fn build_bytes(&self) -> std::result::Result<bytes::Bytes, MqttError> {
+        let mut buf = BytesMut::new();
+        if let Some(c) = &self.payload_format_indicator {
+            buf.extend_from_slice(&[0x01]);
+            buf.extend_from_slice(&(*c as u8).to_be_bytes());
+        }
+        if let Some(c) = &self.message_expiry_interval {
+            buf.extend_from_slice(&[0x02]);
+            buf.extend_from_slice(&c.0.to_be_bytes());
+        }
+        if let Some(c) = &self.topic_alias {
+            buf.extend_from_slice(&[0x23]);
+            buf.extend_from_slice(&c.0.to_be_bytes());
+        }
+
+        if let Some(c) = &self.response_topic {
+            buf.extend_from_slice(&[0x08]);
+            buf.extend_from_slice(&c.0.as_bytes());
+        }
+
+        if let Some(c) = &self.correlation_data {
+            buf.extend_from_slice(&[0x09]);
+            buf.extend_from_slice(&c.0);
+        }
+        if let Some(c) = &self.user_properties {
+            for v in c {
+                let p = &v.0;
+                buf.extend_from_slice(&[0x26]);
+                let l: u16 = p.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(p.0.as_bytes());
+                let l: u16 = p.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+                buf.extend_from_slice(&l.to_be_bytes());
+                buf.extend_from_slice(p.1.as_bytes());
+
+            }
+        }
+        if let Some(c) = &self.subscription_identifier {
+            for v in c {
+                buf.extend_from_slice(&[0x0b]);
+                buf.extend_from_slice(&v.0.to_be_bytes());
+            }
+
+        }
+        if let Some(c) = &self.content_type {
+            buf.extend_from_slice(&[0x03]);
+            buf.extend_from_slice(&c.0.as_bytes());
+        }
+        
+        Ok(buf.freeze())
+    }
+}
+
+
 #[derive(Debug, PartialEq, Clone)]
 #[repr(u8)]
 pub enum PublishProperty {
@@ -1391,10 +1457,11 @@ pub enum PublishProperty {
     ContentType(ContentType),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(u8)]
 pub enum PayloadFormatIndicator {
-    UnspecifiedBytes,
-    UTF8,
+    UnspecifiedBytes = 0,
+    UTF8 = 1,
 }
 
 impl PayloadFormatIndicator {
@@ -1424,6 +1491,7 @@ impl MessageExpiryInterval {
         );
         return Ok((MessageExpiryInterval(i), start_pos + 4));
     }
+
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2089,16 +2157,11 @@ impl MqttPacket for Subscribe {
     ) -> Result<bytes::BytesMut, MqttError> {
         let mut next_pos = 0;
         let start_pos = 0;
-        trace!("Decode payload!!!!!!!!!!! subscribe ");
-
         /* guard for default */
         if self.payload_length == 0 {
-            trace!("Unexpected");
             return Err(MqttError::Unexpected);
         }
         loop {
-            trace!("Loop ! ");
-
             let f: TopicFilter;
             let op: SubscribeOption;
             (f, next_pos) = TopicFilter::try_from(&buf, next_pos)?;
@@ -2109,7 +2172,6 @@ impl MqttPacket for Subscribe {
             if self.payload_length == next_pos - start_pos {
                 break
             } else if self.payload_length < next_pos - start_pos {
-                trace!("Unexpected");
                 return Err(MqttError::Unexpected);
             }
         }
@@ -2161,9 +2223,10 @@ impl MqttPacket for Publish {
 
             // 9 | 10 11 12 13 14 | [ ]
             let end_pos = next_pos + property_length;
-            
+            let mut pub_properties = PublishProperties::default();
             loop {
                 if next_pos == end_pos {
+                    self.pub_properties = Some(pub_properties);
                     break;
                 }
                 if next_pos > end_pos {
@@ -2173,45 +2236,45 @@ impl MqttPacket for Publish {
                     PROPERTY_PAYLOAD_FORMAT_INDICATOR_ID => {
                         let result;
                         (result, next_pos) = PayloadFormatIndicator::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.payload_format_indicator = Some(result);
+                        pub_properties.payload_format_indicator = Some(result);
                     }
                     PROPERTY_MESSAGE_EXPIRY_INTERVAL_ID => {
                         let result;
                         (result, next_pos) = MessageExpiryInterval::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.message_expiry_interval = Some(result);
+                        pub_properties.message_expiry_interval = Some(result);
                     }
                     PROPERTY_TOPIC_ALIAS_ID => {
                         // It is a Protocol Error to include the Topic Alias value more than once.
-                        if self.pub_properties.topic_alias != None {
+                        if pub_properties.topic_alias != None {
                             return Err(MqttError::InvalidFormat);
                         }
                         let result;
                         (result, next_pos) = TopicAlias::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.topic_alias = Some(result);
+                        pub_properties.topic_alias = Some(result);
                     }
                     PROPERTY_RESPONSE_TOPIC_ID => {
                         // It is a Protocol Error to include the Topic Alias value more than once.
-                        if self.pub_properties.response_topic != None {
+                        if pub_properties.response_topic != None {
                             return Err(MqttError::InvalidFormat);
                         }
                         let result;
                         (result, next_pos) = ResponseTopic::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.response_topic = Some(result);
+                        pub_properties.response_topic = Some(result);
                     }
                     PROPERTY_CORRELATION_DATA_ID => {
                         // It is a Protocol Error to include the Topic Alias value more than once.
-                        if self.pub_properties.correlation_data != None {
+                        if pub_properties.correlation_data != None {
                             return Err(MqttError::InvalidFormat);
                         }
                         let result;
                         (result, next_pos) = CorrelationData::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.correlation_data = Some(result);
+                        pub_properties.correlation_data = Some(result);
                     }
                     PROPERTY_USER_PROPERTY_ID => {
                         let user_property;
                         (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
                         // 所有権を奪わずに変更する。
-                        self.pub_properties
+                        pub_properties
                             .user_properties
                             .get_or_insert_with(Vec::new)
                             .push(user_property);
@@ -2219,19 +2282,19 @@ impl MqttPacket for Publish {
                     PROPERTY_SUBSCRIPTION_IDENTIFIER_ID => {
                         let result;
                         (result, next_pos) = SubscriptionIdentifier::try_from(buf, next_pos + 1)?;
-                        self.pub_properties
+                        pub_properties
                             .subscription_identifier
                             .get_or_insert_with(Vec::new)
                             .push(result);
                     }
                     PROPERTY_CONTENT_TYPE_ID => {
                         // It is a Protocol Error to include the Content Type more than once.
-                        if self.pub_properties.content_type != None {
+                        if pub_properties.content_type != None {
                             return Err(MqttError::InvalidFormat);
                         }
                         let result;
                         (result, next_pos) = ContentType::try_from(buf, next_pos + 1)?;
-                        self.pub_properties.content_type = Some(result);
+                        pub_properties.content_type = Some(result);
                     }
                     _ => {
                         return Err(MqttError::InvalidFormat);
@@ -2256,9 +2319,69 @@ impl MqttPacket for Publish {
         self.payload_data = buf.freeze();
         Ok(res)
     }
-    // [TODO]
     fn encode_header(&self) -> Result<Bytes, MqttError> {
-        todo!()
+        let mut encoded_properties_len: Option<Vec<u8>> = None;
+        let mut prop_len = 0;
+        let mut properties_bytes: Option<bytes::Bytes> = None;
+        if self.protocol_version == ProtocolVersion(0x05) {
+            if let Some(pub_properties) = &self.pub_properties {
+                let prop_bytes = pub_properties.build_bytes()?;
+                prop_len = prop_bytes.len();
+                let encoded_len = encode_variable_bytes(prop_len);
+                encoded_properties_len = Some(encoded_len);
+                properties_bytes = Some(prop_bytes);
+            } else {
+                encoded_properties_len = Some(encode_variable_bytes(0));
+                properties_bytes = Some(bytes::Bytes::new());
+            }
+        }
+
+        let mut remaining_length = self.payload_data.len() + self.topic_name.len();
+        if self.packet_id == None && (self.qos != QoS::QoS0) {
+            return Err(MqttError::InvalidFormat);
+        } else {
+            remaining_length = remaining_length + self.packet_id.as_ref().unwrap().len();
+        }
+
+        if self.protocol_version == ProtocolVersion(0x05) {
+            remaining_length = remaining_length + properties_bytes.as_ref().unwrap().len() + encoded_properties_len.clone().unwrap().len();
+        }
+        let encoded_remaining_length = encode_variable_bytes(remaining_length);
+
+        let mut buf = bytes::BytesMut::new();  // with capacityは自動で拡張されるので問題ない
+
+        let dup = if self.dup.0 { 0b0000_1000 } else {0b0000_0000};
+        let qos = match self.qos {
+            QoS::QoS0 => 0b0000_0000,
+            QoS::QoS1 => 0b0000_0010,
+            QoS::QoS2 => 0b0000_0100,
+        };
+        let retain = if self.retain.0 {0b0000_0001} else {0b0000_0000};
+
+        buf.put_u8(0b0011_0000 | dup | qos | retain);
+
+        buf.extend_from_slice(&encoded_remaining_length);
+        
+        /* topic name */
+        buf.put_u16(self.topic_name.value().len() as u16);
+        buf.extend_from_slice(self.topic_name.value().as_bytes());
+
+        /* packet id */
+        if self.qos != QoS::QoS0 {
+            if let Some(id) = &self.packet_id {
+                buf.put_u16(id.0);
+            }
+        }
+
+        /* properties */
+        if self.protocol_version == ProtocolVersion(0x05) {
+            let b = properties_bytes.unwrap();
+            let l = encoded_properties_len.clone().unwrap();
+            buf.extend_from_slice(&l);
+            buf.extend_from_slice(&b);
+        }
+
+        Ok(buf.freeze())
     }
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
         todo!()
