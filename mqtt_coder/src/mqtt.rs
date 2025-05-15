@@ -1309,7 +1309,7 @@ fn decode_lower_fixed_header(
     ))
 }
 
-#[derive(Debug, PartialEq, Clone, Default, Copy)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct TopicName(String); // variable header
 
 impl TopicName {
@@ -2204,7 +2204,7 @@ impl MqttPacket for Publish {
         // topic name UTF-8 Encoded String
         trace!("publish decode variable header {:?}", &buf);
         let (result, mut next_pos) = TopicName::try_from(buf, start_pos)?;
-        self.topic_name = Some(result);
+        self.topic_name = result;
         // packet identifier
         if self.qos == QoS::QoS1 || self.qos == QoS::QoS2 {
             // check
@@ -2336,7 +2336,7 @@ impl MqttPacket for Publish {
             }
         }
 
-        let mut remaining_length = self.payload_data.len() + self.topic_name.len();
+        let mut remaining_length = self.payload_data.len() + self.topic_name.clone().len();
         if self.packet_id == None && (self.qos != QoS::QoS0) {
             return Err(MqttError::InvalidFormat);
         } else {
@@ -2363,8 +2363,8 @@ impl MqttPacket for Publish {
         buf.extend_from_slice(&encoded_remaining_length);
         
         /* topic name */
-        buf.put_u16(self.topic_name.value().len() as u16);
-        buf.extend_from_slice(self.topic_name.value().as_bytes());
+        buf.put_u16(self.topic_name.clone().value().len() as u16);
+        buf.extend_from_slice(self.topic_name.clone().value().as_bytes());
 
         /* packet id */
         if self.qos != QoS::QoS0 {
@@ -2835,10 +2835,10 @@ mod tests {
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
                 publish.topic_name,
-                Some(TopicName("hello/topic".to_string()))
+                TopicName("hello/topic".to_string())
             );
             assert_eq!(
-                publish.pub_properties.user_properties,
+                publish.pub_properties.unwrap().user_properties,
                 Some(vec![
                     UserProperty(("a".to_string(), "2".to_string())),
                     UserProperty(("c".to_string(), "3".to_string()))
@@ -2909,33 +2909,33 @@ mod tests {
             assert_eq!(publish.retain, Retain(true));
             assert_eq!(
                 publish.topic_name,
-                Some(TopicName("hello/topic".to_string()))
+                TopicName("hello/topic".to_string())
             );
             assert_eq!(
-                publish.pub_properties.user_properties,
+                publish.pub_properties.clone().unwrap().user_properties,
                 Some(vec![
                     UserProperty(("a".to_string(), "2".to_string())),
                     UserProperty(("c".to_string(), "3".to_string()))
                 ])
             );
             assert_eq!(
-                publish.pub_properties.message_expiry_interval,
+                publish.pub_properties.clone().unwrap().message_expiry_interval,
                 Some(MessageExpiryInterval(60))
             );
             assert_eq!(
-                publish.pub_properties.payload_format_indicator,
+                publish.pub_properties.clone().unwrap().payload_format_indicator,
                 Some(PayloadFormatIndicator::UTF8)
             );
             assert_eq!(
-                publish.pub_properties.content_type,
+                publish.pub_properties.clone().unwrap().content_type,
                 Some(ContentType("text/plain".to_string()))
             );
             assert_eq!(
-                publish.pub_properties.response_topic,
+                publish.pub_properties.clone().unwrap().response_topic,
                 Some(ResponseTopic("response/topic".to_string()))
             );
             assert_eq!(
-                publish.pub_properties.correlation_data,
+                publish.pub_properties.clone().unwrap().correlation_data,
                 Some(CorrelationData(bytes::Bytes::copy_from_slice(
                     "12345".as_bytes()
                 )))
