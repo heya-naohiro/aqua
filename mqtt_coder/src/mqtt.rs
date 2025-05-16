@@ -2320,31 +2320,35 @@ impl MqttPacket for Publish {
         Ok(res)
     }
     fn encode_header(&self) -> Result<Bytes, MqttError> {
-        let mut encoded_properties_len: Option<Vec<u8>> = None;
-        let mut prop_len = 0;
-        let mut properties_bytes: Option<bytes::Bytes> = None;
-        if self.protocol_version == ProtocolVersion(0x05) {
-            if let Some(pub_properties) = &self.pub_properties {
-                let prop_bytes = pub_properties.build_bytes()?;
-                prop_len = prop_bytes.len();
-                let encoded_len = encode_variable_bytes(prop_len);
-                encoded_properties_len = Some(encoded_len);
-                properties_bytes = Some(prop_bytes);
-            } else {
-                encoded_properties_len = Some(encode_variable_bytes(0));
-                properties_bytes = Some(bytes::Bytes::new());
-            }
-        }
+        //let mut enc_props_len: Option<Vec<u8>> = None;
+        //let mut props_bytes: Option<bytes::Bytes> = None;
 
-        let mut remaining_length = self.payload_data.len() + self.topic_name.clone().len();
-        if self.packet_id == None && (self.qos != QoS::QoS0) {
-            return Err(MqttError::InvalidFormat);
+        let (enc_props_len_opt, props_bytes_opt) = if self.protocol_version == ProtocolVersion(0x05) {
+            let prop_bytes = self.pub_properties
+                .as_ref()
+                .map(|p| p.build_bytes())
+                .transpose()?
+                .unwrap_or_else(Bytes::new);
+            let enc = encode_variable_bytes(prop_bytes.len());
+            (Some(enc), Some(prop_bytes))
         } else {
-            remaining_length = remaining_length + self.packet_id.as_ref().unwrap().len();
-        }
+            (None, None)
+        };
+         //  参照だけ取り出して長さだけ読む 
+        let (enc_props_ref, props_ref) = (enc_props_len_opt.as_ref(), props_bytes_opt.as_ref());
+        let enc_len = enc_props_ref.map(|v| v.len()).unwrap_or(0);
+        let props_len = props_ref.map(|v| v.len()).unwrap_or(0);
+
+        let mut remaining_length = self.payload_data.len() + self.topic_name.clone().value().len()
+          +  if self.qos != QoS::QoS0 {
+            self.packet_id.as_ref().ok_or(MqttError::InvalidFormat)?.len()
+        } else {
+            0
+        };
 
         if self.protocol_version == ProtocolVersion(0x05) {
-            remaining_length = remaining_length + properties_bytes.as_ref().unwrap().len() + encoded_properties_len.clone().unwrap().len();
+            // always some
+            remaining_length += enc_len + props_len;
         }
         let encoded_remaining_length = encode_variable_bytes(remaining_length);
 
@@ -2363,22 +2367,19 @@ impl MqttPacket for Publish {
         buf.extend_from_slice(&encoded_remaining_length);
         
         /* topic name */
-        buf.put_u16(self.topic_name.clone().value().len() as u16);
-        buf.extend_from_slice(self.topic_name.clone().value().as_bytes());
+        let topic = self.topic_name.clone().value();
+        buf.put_u16(topic.len() as u16);
+        buf.extend_from_slice(topic.as_bytes());
 
         /* packet id */
         if self.qos != QoS::QoS0 {
-            if let Some(id) = &self.packet_id {
-                buf.put_u16(id.0);
-            }
+            buf.put_u16(self.packet_id.as_ref().unwrap().0);
         }
 
         /* properties */
-        if self.protocol_version == ProtocolVersion(0x05) {
-            let b = properties_bytes.unwrap();
-            let l = encoded_properties_len.clone().unwrap();
-            buf.extend_from_slice(&l);
-            buf.extend_from_slice(&b);
+        if let (Some(enc_props), Some(props)) = (enc_props_ref, props_ref) {
+            buf.extend_from_slice(enc_props);
+            buf.extend_from_slice(props);
         }
 
         Ok(buf.freeze())
