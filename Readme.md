@@ -1,33 +1,5 @@
-## 
-OtherPublishのようなコントロールパケットが必要
-受信・送信をわけるのが必要
-状態の整理とリファクタ、状態の送受信の分離が必要
+# aqua, mqtt protocol framework like axum
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/heya-naohiro/aqua)
 
-
-protocolとして、Towerを採用する
-Towerはhttp以外にも使えるらしい
-https://github.com/tower-rs/tower/tree/master/guides
-
-メモ：decoderのみのテスト
-```
-cargo test --package mqtt_decoder --lib mqtt
-```
-
-
-// Request Bodyはhttp=axum用語
-towerのhostの実装方法をマスターすべき
-
-
-## memo
-複数のmiddlewareが存在して然るべき
-- MQTT着信時
-- MQTTパケット確定時
-- Publishペイロード処理時
-
-## TODO
-送信、受信に使用するbufは単一Connectで送信・受信それぞれで使い回すことができるそう
-
-## TODO2
-ビルドできるまでにする(Con-Connack)
-exampleを用意する
-tests配下にpytestでintegration testを書く
+## about (from deepwiki)
+Aqua provides a modular, extensible framework for building MQTT servers in Rust. By leveraging the Tower service architecture, it enables a clean separation of concerns between connection handling, protocol processing, and business logic. The system's components are designed to be composable and reusable, facilitating customization for different use cases. For developers looking to implement custom MQTT brokers, Aqua offers a foundation that handles the complexities of the MQTT protocol while providing integration points for application-specific functionality.
