@@ -65,22 +65,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let topic_mgr = Arc::clone(&topic_mgr);
                                 let pubpacket = pubpacket.clone();
                                 tokio::spawn(async move {
-                                    if let Some(topic_name) = pubpacket.topic_name.clone() {
-                                        let subed_clients =
-                                            topic_mgr.subed_id(topic_name.value().to_string());
-                                        for (sub_id, _option) in subed_clients {
-                                            let result = SESSION_MANAGER.send_by_mqtt_id(
-                                                &sub_id,
-                                                ControlPacket::PUBLISH(pubpacket.clone()),
-                                            );
-                                            if let Ok(()) = result {
-                                                println!("Delivering to {:?}", sub_id);
-                                            } else {
-                                                println!("Error {:?}", sub_id);
-                                            }
+                                    let subed_clients = topic_mgr
+                                        .subed_id(pubpacket.topic_name.clone().value().to_string());
+                                    for (sub_id, _option) in subed_clients {
+                                        let result = SESSION_MANAGER.send_by_mqtt_id(
+                                            &sub_id,
+                                            ControlPacket::PUBLISH(pubpacket.clone()),
+                                        );
+                                        if let Ok(()) = result {
+                                            println!("Delivering to {:?}", sub_id);
+                                        } else {
+                                            println!("Error {:?}", sub_id);
                                         }
-                                    } else {
-                                        print!("Pubpacket topic name not found ")
                                     }
                                 });
                                 return Ok(response::Response::new(ControlPacket::NOOPERATION));

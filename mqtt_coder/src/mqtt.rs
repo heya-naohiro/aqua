@@ -1407,35 +1407,35 @@ impl PublishProperties {
 
         if let Some(c) = &self.response_topic {
             buf.extend_from_slice(&[0x08]);
+            buf.put_u16(c.0.len() as u16);
             buf.extend_from_slice(&c.0.as_bytes());
         }
 
         if let Some(c) = &self.correlation_data {
             buf.extend_from_slice(&[0x09]);
+            buf.put_u16(c.0.len() as u16);
             buf.extend_from_slice(&c.0);
         }
         if let Some(c) = &self.user_properties {
-            for v in c {
-                let p = &v.0;
-                buf.extend_from_slice(&[0x26]);
-                let l: u16 = p.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
-                buf.extend_from_slice(&l.to_be_bytes());
-                buf.extend_from_slice(p.0.as_bytes());
-                let l: u16 = p.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
-                buf.extend_from_slice(&l.to_be_bytes());
-                buf.extend_from_slice(p.1.as_bytes());
-
+            for UserProperty((key, value)) in c {
+                buf.put_u8(0x26);
+                buf.put_u16(key.len() as u16);
+                buf.extend_from_slice(key.as_bytes());
+        
+                buf.put_u16(value.len() as u16);
+                buf.extend_from_slice(value.as_bytes());
             }
         }
         if let Some(c) = &self.subscription_identifier {
-            for v in c {
-                buf.extend_from_slice(&[0x0b]);
-                buf.extend_from_slice(&v.0.to_be_bytes());
+            for id in c {
+                buf.put_u8(0x0B); 
+                buf.extend_from_slice(&encode_variable_bytes(id.0)); // VarInt
             }
 
         }
         if let Some(c) = &self.content_type {
             buf.extend_from_slice(&[0x03]);
+            buf.put_u16(c.0.len() as u16);
             buf.extend_from_slice(&c.0.as_bytes());
         }
         
@@ -2320,9 +2320,6 @@ impl MqttPacket for Publish {
         Ok(res)
     }
     fn encode_header(&self) -> Result<Bytes, MqttError> {
-        //let mut enc_props_len: Option<Vec<u8>> = None;
-        //let mut props_bytes: Option<bytes::Bytes> = None;
-
         let (enc_props_len_opt, props_bytes_opt) = if self.protocol_version == ProtocolVersion(0x05) {
             let prop_bytes = self.pub_properties
                 .as_ref()
@@ -2336,21 +2333,8 @@ impl MqttPacket for Publish {
         };
          //  参照だけ取り出して長さだけ読む 
         let (enc_props_ref, props_ref) = (enc_props_len_opt.as_ref(), props_bytes_opt.as_ref());
-        let enc_len = enc_props_ref.map(|v| v.len()).unwrap_or(0);
-        let props_len = props_ref.map(|v| v.len()).unwrap_or(0);
-
-        let mut remaining_length = self.payload_data.len() + self.topic_name.clone().value().len()
-          +  if self.qos != QoS::QoS0 {
-            self.packet_id.as_ref().ok_or(MqttError::InvalidFormat)?.len()
-        } else {
-            0
-        };
-
-        if self.protocol_version == ProtocolVersion(0x05) {
-            // always some
-            remaining_length += enc_len + props_len;
-        }
-        let encoded_remaining_length = encode_variable_bytes(remaining_length);
+        //let enc_len = enc_props_ref.map(|v| v.len()).unwrap_or(0);
+        //let props_len = props_ref.map(|v| v.len()).unwrap_or(0);
 
         let mut buf = bytes::BytesMut::new();  // with capacityは自動で拡張されるので問題ない
 
@@ -2364,28 +2348,33 @@ impl MqttPacket for Publish {
 
         buf.put_u8(0b0011_0000 | dup | qos | retain);
 
-        buf.extend_from_slice(&encoded_remaining_length);
+        //buf.extend_from_slice(&encoded_remaining_length);
         
+        let mut variable_header_buf = BytesMut::new();
+
         /* topic name */
         let topic = self.topic_name.clone().value();
-        buf.put_u16(topic.len() as u16);
-        buf.extend_from_slice(topic.as_bytes());
+        variable_header_buf.put_u16(topic.len() as u16);
+        variable_header_buf.extend_from_slice(topic.as_bytes());
 
         /* packet id */
         if self.qos != QoS::QoS0 {
-            buf.put_u16(self.packet_id.as_ref().unwrap().0);
+            variable_header_buf.put_u16(self.packet_id.as_ref().unwrap().0);
         }
 
         /* properties */
         if let (Some(enc_props), Some(props)) = (enc_props_ref, props_ref) {
-            buf.extend_from_slice(enc_props);
-            buf.extend_from_slice(props);
+            variable_header_buf.extend_from_slice(enc_props);
+            variable_header_buf.extend_from_slice(props);
         }
+        let encoded_remaining_length = encode_variable_bytes(variable_header_buf.len() + self.payload_length);
+        buf.extend_from_slice(&encoded_remaining_length);
+        buf.extend_from_slice(&variable_header_buf);
 
         Ok(buf.freeze())
     }
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
-        todo!()
+        Ok(Some(self.payload_data.clone()))
     }
 }
 
@@ -3536,4 +3525,84 @@ fn mqtt5_subscribe_full_parse() {
 
         }
     }
+
+    #[test]
+    fn write_publish_mqtt_3() {
+        let publish = Publish {
+            dup: Dup(false),
+            qos: QoS::QoS0,
+            retain: Retain(false),
+            topic_name: TopicName("test".to_string()),
+            pub_properties: None,
+            packet_id: None,
+            payload_length: 5,
+            payload_data: Bytes::from("hello"),
+            protocol_version: ProtocolVersion(0x04),  // MQTT 3.1.1
+        };
+
+        let expected: Vec<u8> = vec![
+            0x30,       // PUBLISH, DUP=0, QoS0, RETAIN=0
+            0x0B,       // Remaining Length = 11
+            0x00, 0x04, // Topic Name length = 4
+            0x74, 0x65, 0x73, 0x74, // "test"
+            // (QoS0 なので packet_id は無し)
+            // Payload bytes
+            0x68, 0x65, 0x6C, 0x6C, 0x6F, // "hello"  
+        ];
+        assert_eq!(&publish.encode_header().unwrap().to_vec(), &expected[..8]);
+        assert_eq!(publish.encode_payload_chunk().unwrap().unwrap_or_else(Bytes::new).to_vec(), expected[8..].to_vec());
+
+    }
+
+    #[test]
+    fn write_publish_mqtt5_full() {
+        let publish = Publish {
+            dup: Dup(true),
+            qos: QoS::QoS1,
+            retain: Retain(true),
+            topic_name: TopicName("sensors/temperature".to_string()),
+            pub_properties: Some(PublishProperties {
+                payload_format_indicator: Some(PayloadFormatIndicator::UTF8),
+                message_expiry_interval: Some(MessageExpiryInterval(60)),
+                topic_alias: Some(TopicAlias(10)),
+                response_topic: Some(ResponseTopic("reply/topic".to_string())),
+                correlation_data: Some(CorrelationData(Bytes::from_static(b"abc123"))),
+                user_properties: Some(vec![
+                    UserProperty(("key1".to_string(), "value1".to_string())),
+                ]),
+                subscription_identifier: Some(vec![SubscriptionIdentifier(1)]),
+                content_type: Some(ContentType("application/json".to_string())),
+            }),
+            packet_id: Some(PacketId(1234)),
+            payload_length: 4,
+            payload_data: Bytes::from_static(b"test"),
+            protocol_version: ProtocolVersion(0x05),
+        };
+        let expected: Vec<u8> = vec![
+            0x3B, 0x61,             // Fixed header
+            0x00, 0x13,             // topic length = 20
+            b's', b'e', b'n', b's', b'o', b'r', b's', b'/', b't', b'e', b'm', b'p', b'e', b'r', b'a', b't', b'u', b'r', b'e',
+            0x04, 0xD2,             // packet id = 1234
+            0x45,                   // properties length (69)
+            0x01, 0x01,             // payload_format_indicator
+            0x02, 0x00, 0x00, 0x00, 0x3C, // message_expiry_interval
+            0x23, 0x00, 0x0A,       // topic_alias
+            0x08, 0x00, 0x0B, b'r', b'e', b'p', b'l', b'y', b'/', b't', b'o', b'p', b'i', b'c',
+            0x09, 0x00, 0x06, b'a', b'b', b'c', b'1', b'2', b'3',
+            0x26, 0x00, 0x04, b'k', b'e', b'y', b'1', 0x00, 0x06, b'v', b'a', b'l', b'u', b'e', b'1',
+            0x0B, 0x01,
+            0x03, 0x00, 0x10, b'a', b'p', b'p', b'l', b'i', b'c', b'a', b't', b'i', b'o', b'n', b'/', b'j', b's', b'o', b'n',
+            b't', b'e', b's', b't' // payload
+        ];
+
+        let header = publish.encode_header().unwrap();
+        let payload = publish.encode_payload_chunk().unwrap().unwrap_or_else(Bytes::new);
+
+        assert_eq!(header.to_vec(), expected[..header.len()].to_vec());
+        assert_eq!(payload.to_vec(), expected[header.len()..].to_vec());
+    }
+    
+
 }
+
+
