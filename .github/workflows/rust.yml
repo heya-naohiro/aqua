@@ -21,11 +21,15 @@ jobs:
       run: cargo test --verbose
     - name: Install uv
       uses: astral-sh/setup-uv@v5
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version-file: "interoperability_pytest/pyproject.toml"
     - name: Install the project
-      run: uv sync --locked --all-extras --dev 
+      run: uv sync --all-extras --dev
       working-directory: interoperability_pytest
-    - name: Add .venv/bin to PATH
-      run: echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
-    - name: broker test
-      run: uv run pytest
+    - name: Run tests
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+      run: uv run pytest tests
       
