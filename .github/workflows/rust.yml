@@ -28,8 +28,16 @@ jobs:
     - name: Install the project
       run: uv sync --dev
       working-directory: interoperability_pytest
+    - name: Set up virtualenv with uv
+      run: uv venv
+
+    - name: Install dependencies with uv
+      run: uv pip install -e .[dev]
+      working-directory: interoperability_pytest
+
     - name: Run tests
-      env:
-        PYTHONPATH: ${{ github.workspace }}
-      run: uv run pytest tests
-      
+      run: |
+        source .venv/bin/activate
+        pytest tests
+      working-directory: interoperability_pytest
+          
