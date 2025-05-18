@@ -1,4 +1,4 @@
-name: Test
+name: Rust Component Test
 
 on:
   push:
@@ -14,25 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
     - name: mqtt-coder test
       run: cargo test --verbose
       working-directory: mqtt_coder
-
     - name: lib test
       run: cargo test --verbose
-
     - name: Install uv
       uses: astral-sh/setup-uv@v5
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version-file: "interoperability_pytest/pyproject.toml"
-
-    - name: Set up virtualenv with uv
-      run: uv venv .venv
+    - name: Install the project
+      run: uv sync --dev
       working-directory: interoperability_pytest
+    - name: Set up virtualenv with uv
+      run: uv venv
 
     - name: Install dependencies with uv
       run: uv pip install -e .[dev]
@@ -43,3 +40,4 @@ jobs:
         source .venv/bin/activate
         pytest tests
       working-directory: interoperability_pytest
+          
