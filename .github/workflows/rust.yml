@@ -24,6 +24,6 @@ jobs:
     - name: Install the project
       run: uv sync --locked --all-extras --dev
       working-directory: interoperability_pytest
-    - name: integration test (interoperability)
+    - name: broker test
       run: uv run pytest
       
