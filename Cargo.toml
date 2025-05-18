@@ -11,16 +11,16 @@ members = [
 [dependencies]
 hex = "0.4"
 anyhow = { version = "1.0.89", features = ["backtrace", "std"]}
-axum = "0.7.7"
+axum = "0.8.4"
 futures-util = "0.3.30"
 pin-project = "1.1.5"
 tokio = { version = "1.38.1", features = ["full"] }
 tower = {version = "0.5.1", features=["full"]}
 tower-service = "0.3.2"
-axum-core = "0.4.3"
+axum-core = "0.5.2"
 pin-project-lite = "0.2.14"
 bytes = "1.7.2"
-thiserror = "1.0.64"
+thiserror = "2.0.12"
 mqtt_coder = {path = "./mqtt_coder"}
 log = "0.4"
 tracing = "0.1"

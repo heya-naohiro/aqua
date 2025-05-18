@@ -29,7 +29,6 @@ class TestMqttConnect:
     def on_disconnect(self, client, userdata, rc):
         print(f"Disconnected with result code {rc}")
 
-    """
     def test_connect(self):
         self.client.connect("127.0.0.1", 1883, 60)
         self.client.loop_start()
@@ -39,7 +38,6 @@ class TestMqttConnect:
             time.sleep(0.1)
 
         assert self.connected, "MQTT failed to connect"
-    """
     
     def test_subscribe_recieve(self):
         self.client.connect("127.0.0.1", 1883, 60)
