@@ -14,5 +14,3 @@ dev = [
     "pytest>=8.3.5",
 ]
 
-[tool.uv]
-packages = ["paho_test"]

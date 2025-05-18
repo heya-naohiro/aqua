@@ -26,7 +26,7 @@ jobs:
       with:
         python-version-file: "interoperability_pytest/pyproject.toml"
     - name: Install the project
-      run: uv sync --all-extras --dev
+      run: uv sync --dev
       working-directory: interoperability_pytest
     - name: Run tests
       env:
