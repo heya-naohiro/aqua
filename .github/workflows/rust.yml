@@ -23,9 +23,9 @@ jobs:
       uses: astral-sh/setup-uv@v5
     - name: Install the project
       run: uv sync --locked --all-extras --dev 
+      working-directory: interoperability_pytest
     - name: Add .venv/bin to PATH
       run: echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
-      working-directory: interoperability_pytest
     - name: broker test
       run: uv run pytest
       
