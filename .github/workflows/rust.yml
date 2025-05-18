@@ -10,13 +10,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
+    - name: mqtt-coder test
       run: cargo test --verbose
+      working-directory: mqtt_coder
+    - name: lib test
+      run: cargo test --verbose
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: integration test (interoperability)
+      run: uv run pytest
+      

@@ -23,10 +23,10 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
-use tracing::{instrument, trace};
+use tracing::trace;
 use uuid::Uuid;
 
-const BUFFER_CAPACITY: usize = 4096;
+//const BUFFER_CAPACITY: usize = 4096;
 const CHANNEL_CAPACITY: usize = 32;
 use crate::aqua::connection::session_manager::SessionManager;
 use once_cell::sync::Lazy;
