@@ -178,19 +178,37 @@ pub mod topic_manager {
         }
 
         fn is_match(&self, topic_filter: &String, topic: &String) -> bool {
-            let filter_elms: Vec<String> = topic_filter.split("/").map(|s| s.to_string()).collect();
+            let filter_segment: Vec<&str> = topic_filter.split('/').collect();
+            let topic_segment: Vec<&str> = topic.split('/').collect();
+
             let mut filter_index = 0;
-            for te in topic.split('/') {
-                if filter_elms[filter_index] == "#" {
-                    return true;
-                }
-                if te == filter_elms[filter_index] || filter_elms[filter_index] == "+" {
-                    filter_index = filter_index + 1;
-                } else {
-                    return false;
+            let mut topic_index = 0;
+            while filter_index < filter_segment.len() {
+                match filter_segment[filter_index] {
+                    "#" => {
+                        // should be last
+                        return filter_index == filter_segment.len() - 1;
+                    }
+                    "+" => {
+                        if topic_index >= topic_segment.len() {
+                            return false;
+                        }
+                        filter_index += 1;
+                        topic_index += 1;
+                    }
+                    filter
+                        if topic_index < topic_segment.len()
+                            && filter == topic_segment[topic_index] =>
+                    {
+                        filter_index += 1;
+                        topic_index += 1;
+                    }
+                    _ => {
+                        return false;
+                    }
                 }
             }
-            return true;
+            topic_index == topic_segment.len()
         }
     }
 }
