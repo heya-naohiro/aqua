@@ -208,6 +208,7 @@ pub mod topic_manager {
                     }
                 }
             }
+            // have been comsumed all segments
             topic_index == topic_segment.len()
         }
     }

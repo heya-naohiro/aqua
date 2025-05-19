@@ -56,7 +56,7 @@ class TestMqttConnect:
 
         print(" ^^^^^^^ publish ^^^^^^")
         self.client.publish("test/topic", "Hello MQTT")
-        time.sleep(10)
+        time.sleep(1)
         print(" ^^^^^^^ publish done ^^^^^^")
 
         assert "Hello MQTT" in self.recieved_messages, "Subscribe でメッセージを受信できませんでした"
