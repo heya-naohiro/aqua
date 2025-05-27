@@ -1,6 +1,8 @@
+use aqua::session_manager;
 use aqua::ConnackResponse;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
+use mqtt_coder::mqtt::Puback;
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
 };
@@ -63,14 +65,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             ControlPacket::PUBLISH(pubpacket) => {
                                 let topic_mgr = Arc::clone(&topic_mgr);
-                                let pubpacket = pubpacket.clone();
+                                let pubpacket_clone_for_spawn = pubpacket.clone();
+                                let qos = pubpacket.qos;
+                                let packet_id = pubpacket.packet_id.clone();
                                 tokio::spawn(async move {
-                                    let subed_clients = topic_mgr
-                                        .subed_id(pubpacket.topic_name.clone().value().to_string());
+                                    let subed_clients = topic_mgr.subed_id(
+                                        pubpacket_clone_for_spawn
+                                            .topic_name
+                                            .clone()
+                                            .value()
+                                            .to_string(),
+                                    );
                                     for (sub_id, _option) in subed_clients {
                                         let result = SESSION_MANAGER.send_by_mqtt_id(
                                             &sub_id,
-                                            ControlPacket::PUBLISH(pubpacket.clone()),
+                                            ControlPacket::PUBLISH(
+                                                pubpacket_clone_for_spawn.clone(),
+                                            ),
                                         );
                                         if let Ok(()) = result {
                                             println!("Delivering to {:?}", sub_id);
@@ -79,7 +90,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 });
-                                return Ok(response::Response::new(ControlPacket::NOOPERATION));
+                                // [TODO] need pub id check except QoS0
+                                match qos {
+                                    mqtt::QoS::QoS0 => {
+                                        return Ok(response::Response::new(
+                                            ControlPacket::NOOPERATION,
+                                        ));
+                                    }
+                                    mqtt::QoS::QoS1 => {
+                                        return Ok(response::Response::new(ControlPacket::PUBACK(
+                                            Puback {
+                                                reason_code: None,
+                                                packet_id: pubpacket.packet_id.unwrap(),
+                                                puback_properties: None,
+                                                protocol_version: pubpacket.protocol_version,
+                                            },
+                                        )));
+                                    }
+                                    mqtt::QoS::QoS2 => {
+                                        let v = pubpacket.protocol_version.clone();
+                                        let id = packet_id.unwrap().clone();
+                                        SESSION_MANAGER
+                                            .add_staging_packet(pubpacket, mqtt::QoS::QoS2);
+                                        return Ok(response::Response::new(ControlPacket::PUBREC(
+                                            mqtt::Pubrec {
+                                                packet_id: id,
+                                                reason_code: Some(mqtt::PubrecReasonCode::Success),
+                                                pubrec_properties: None,
+                                                protocol_version: v,
+                                            },
+                                        )));
+                                    }
+                                }
                             }
                             _ => {
                                 return Ok(response::Response::default());

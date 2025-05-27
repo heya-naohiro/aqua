@@ -1,6 +1,6 @@
 use crate::aqua::connection::response::Response;
 use dashmap::DashMap;
-use mqtt_coder::mqtt::ControlPacket;
+use mqtt_coder::mqtt::{ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -29,6 +29,7 @@ pub struct SessionManager {
     by_client_id: Arc<DashMap<Uuid, Outbound>>,
     by_mqtt_id: Arc<DashMap<String, Uuid>>,
     by_client_mqtt: Arc<DashMap<Uuid, String>>,
+    qos_tmp: Arc<DashMap<u16, (Publish, QoS)>>,
 }
 
 impl SessionManager {
@@ -37,7 +38,30 @@ impl SessionManager {
             by_client_id: Arc::new(DashMap::new()),
             by_mqtt_id: Arc::new(DashMap::new()),
             by_client_mqtt: Arc::new(DashMap::new()),
+            qos_tmp: Arc::new(DashMap::new()),
         }
+    }
+
+    // for re-send, for QoS2
+    pub fn add_staging_packet(&self, pkt: Publish, qos: QoS) {
+        if let Some(ref id) = pkt.packet_id {
+            self.qos_tmp.insert(id.value().clone(), (pkt, qos));
+        }
+    }
+    pub fn fetch_packet(&self, pid: PacketId) -> Result<Publish, MqttError> {
+        if let Some(entry) = self.qos_tmp.get(&pid.value()) {
+            let (publish, _) = entry.value();
+            return Ok(publish.clone());
+        } else {
+            return Err(MqttError::Unexpected);
+        }
+    }
+
+    pub fn commit_packet(&self, pid: PacketId) -> Result<(), MqttError> {
+        if let Some(_) = self.qos_tmp.remove(&pid.value()) {
+            return Ok(());
+        }
+        return Err(MqttError::Unexpected);
     }
 
     pub fn register_client_id(&self, client_id: Uuid, outbound: Outbound) {
