@@ -1,6 +1,8 @@
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use thiserror::Error;
 use tracing::trace;
+use num_enum::TryFromPrimitive;
 
 use crate::mqtt;
 #[derive(Debug, Error)]
@@ -69,6 +71,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::UNSUBSCRIBE(p) => p.decode_payload(buf, protocol_version),
             ControlPacket::PINGREQ(p) => p.decode_payload(buf, protocol_version),
             ControlPacket::PUBREL(p) => p.decode_payload(buf, protocol_version),
+            ControlPacket::DISCONNECT(p) => p.decode_payload(buf, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -85,6 +88,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::SUBSCRIBE(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
             ControlPacket::UNSUBSCRIBE(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
             ControlPacket::PINGREQ(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
+            ControlPacket::DISCONNECT(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -1172,6 +1176,54 @@ pub enum SubackReasonCode {
     WildcardSubscriptionsNotSupported = 0xa2, /* MQTT5 */
 }
 
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy, TryFromPrimitive, Default)]
+pub enum DisconnectReasonCode {
+    #[default]
+    NormalDisconnection = 0x00,
+    DisconnectWithWillMessage = 0x04,
+    UnspecifiedError = 0x80,
+    MalformedPacket = 0x81,
+    ProtocolError = 0x82,
+    ImplementationSpecificError = 0x83,
+    NotAuthorized = 0x87,
+    ServerBusy = 0x89,
+    ServerShuttingDown = 0x8b,
+    KeepAliveTimeout = 0x8d,
+    SessionTakenOver = 0x8e,
+    TopicFilterInvalid = 0x8f,
+    TopicNameInvalid = 0x90,
+    RecieveMaximumExceeded = 0x93,
+    TopicAliasInvalid = 0x94,
+    PacketTooLarge = 0x95,
+    MessageRateTooHigh = 0x96,
+    QuotaExceeded = 0x97,
+    AdministrativeAction = 0x98,
+    PayloadFormatInvalid = 0x99,
+    RetainNotSupport = 0x9a,
+    QoSNotSupported = 0x9b,
+    UseAnotherServer = 0x9c,
+    ServerMoved = 0x9d,
+    SharedSubscriptionsNotSupported = 0x9e,
+    ConnectionRateExceeded = 0x9f,
+    MaximumConnectTime = 0xa0,
+    SubsctiptionIdentifiersNotSupported = 0xa1,
+    WildcardSubscriptionsNotSupported = 0xa2,
+}
+
+impl DisconnectReasonCode {
+    fn convert(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let byte = *buf.get(start_pos).ok_or(MqttError::InvalidFormat)?;
+        let code = DisconnectReasonCode::try_from(byte).map_err(|_| MqttError::InvalidFormat)?;
+        Ok((code, start_pos + 1))
+    }
+}
+
+
+
 impl From<QoS> for SubackReasonCode {
     fn from(value: QoS) -> Self {
         match value {
@@ -1218,6 +1270,22 @@ impl ReasonString {
         self.0
     }
 }
+
+#[derive(Debug, PartialEq, Clone)]
+struct ServerReference(String);
+impl ServerReference {
+    fn try_from(
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+    ) -> std::result::Result<(Self, usize), MqttError> {
+        let (value, next_pos) = decode_utf8_string(buf, start_pos)?;
+        Ok((ServerReference(value), next_pos))
+    }
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 
 
 impl Suback {
@@ -1374,6 +1442,9 @@ const PROPERTY_WILL_DELAY_INTERVAL: u8 = 0x18;
 
 // Property keys PUBREL
 const PROPERTY_REASON_STRING_ID: u8 = 0x1f;
+
+// Property keys DISCONNECT
+const PROPERTY_SERVER_REFERENCE: u8 = 0x1c;
 
 
 // [TODO] ConnectProperties / WillPropertyもこうする
@@ -1976,6 +2047,16 @@ pub struct WillProperties {
     pub user_properties: Option<Vec<UserProperty>>,
     pub subscription_identifier: Option<SubscriptionIdentifier>,
 }
+
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct DisconnectProperties {
+    pub session_expiry_interval: Option<SessionExpiryInterval>,
+    pub reason_string: Option<ReasonString>,
+    pub user_properties: Option<Vec<UserProperty>>,
+    pub server_reference: Option<ServerReference>,
+}
+
+
 
 #[inline]
 fn byte_pair_to_u16(b_msb: u8, b_lsb: u8) -> u16 {
@@ -2625,14 +2706,99 @@ impl MqttPacket for Connect {
         todo!()
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Disconnect {
+    pub reason_code: DisconnectReasonCode,
+    pub disconnect_properties: Option<DisconnectProperties>
 }
 
-impl Disconnect {
-    fn new() -> Self {
-        Self {
+impl MqttPacket for Disconnect {
+    fn decode_variable_header(
+        &mut self,
+        buf: &bytes::BytesMut,
+        start_pos: usize,
+        remaining_length: usize,
+        protocol_version: Option<ProtocolVersion>,
+    ) -> Result<usize, MqttError> {
+        /*
+
+         */
+        if remaining_length == 0 {
+            self.reason_code = DisconnectReasonCode::NormalDisconnection;
+            return Ok(start_pos);
         }
+        let (result, mut next_pos) = DisconnectReasonCode::convert(buf, start_pos)?;
+        self.reason_code = result;
+        let mut disconnect_pro = DisconnectProperties::default();
+        if protocol_version.unwrap().value() >= 0x05 {
+            let property_length;
+            (property_length, next_pos) = decode_variable_length(buf, next_pos)?;
+            let end_pos = next_pos + property_length;
+            loop {
+                if next_pos == end_pos {
+                    self.disconnect_properties = Some(disconnect_pro);
+                    break;
+                }
+                if next_pos > end_pos {
+                    return Err(MqttError::InvalidFormat);
+                }
+                match buf[next_pos] {
+                    PROPERTY_SESSION_EXPIRY_INTERVAL => {
+                    if let Some(_) = disconnect_pro.session_expiry_interval {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                    let result;
+                    (result, next_pos) = SessionExpiryInterval::try_from(buf, next_pos + 1)?;
+                    disconnect_pro.session_expiry_interval = Some(result);
+                }   
+                    PROPERTY_USER_PROPERTY_ID => {
+                        let user_property;
+                        (user_property, next_pos) = UserProperty::try_from(buf, next_pos + 1)?;
+                        // 所有権を奪わずに変更する。
+                        disconnect_pro
+                            .user_properties
+                            .get_or_insert_with(Vec::new)
+                            .push(user_property);
+                    }
+                    PROPERTY_REASON_STRING_ID => {
+                        if let Some(_) = disconnect_pro.reason_string {
+                            return Err(MqttError::InvalidFormat);
+                        }
+                        let result;
+                        (result, next_pos) = ReasonString::try_from(buf, next_pos + 1)?;
+                        disconnect_pro.reason_string = Some(result);
+
+                    }
+                    PROPERTY_SERVER_REFERENCE => {
+                        let result;
+                        (result, next_pos) = ServerReference::try_from(buf, next_pos)?;
+                        disconnect_pro.server_reference = Some(result);          
+                    }
+
+                    _ => {
+                        return Err(MqttError::InvalidFormat);
+                    }
+                }
+            }
+        }
+        return Ok(next_pos);
+        
+    }
+
+    fn decode_payload(
+        &mut self,
+        buf: bytes::BytesMut,
+        _protocol_version: Option<ProtocolVersion>,
+    ) -> Result<bytes::BytesMut, MqttError> {
+        Ok(buf)
+    }
+
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
+        todo!()
+    }
+
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        todo!()
     }
 }
 
@@ -2663,7 +2829,9 @@ pub mod decoder {
             0b1110 => {
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
                 return Result::Ok((
-                    ControlPacket::DISCONNECT(Disconnect::new()),
+                    ControlPacket::DISCONNECT(Disconnect {
+                        ..Default::default()
+                    }),
                     next_pos,
                     remaining_length,
                 ));
@@ -3144,17 +3312,7 @@ fn mqtt5_subscribe_parse() {
 
         let res = subscribe.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
         assert!(res.is_ok());
-        /*
-        #[derive(PartialEq, Debug, Default)]
-        pub struct Subscribe {
-            pub remain_length: usize,
-            pub packet_id: PacketId,
-            pub sub_properties: SubscribeProperties,
-            /* payload */
-            pub topic_filters: Vec<(TopicFilter, Option<SubscribeOption>)>,
-            payload_length: usize,
-}
-         */
+
         assert_eq!(subscribe.packet_id, PacketId(1));
         assert_eq!(subscribe.topic_filters[0].0, TopicFilter("test/topic1".to_string()));
         assert_eq!(subscribe.topic_filters[0].1, SubscribeOption{
