@@ -1,41 +1,40 @@
 import paho.mqtt.client as mqtt
 import time
+from paho.mqtt.properties import Properties
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.reasoncodes import ReasonCode  # ✅ 単数形を使用
 
-# MQTTブローカー設定（パブリックなブローカー例）
 broker = "localhost"
 port = 1883
 topic = "test/topic"
 
-# クライアント作成
-client = mqtt.Client()
+client = mqtt.Client(protocol=mqtt.MQTTv5)
 
-# 接続成功時のコールバック
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     print("Connected with result code " + str(rc))
 
-# Publish完了時のコールバック（QoS 1または2で呼ばれる）
 def on_publish(client, userdata, mid):
     print("Message published with mid: " + str(mid))
 
 client.on_connect = on_connect
 client.on_publish = on_publish
 
-# ブローカーに接続
 client.connect(broker, port, keepalive=60)
-
-# ループを開始（非同期）
 client.loop_start()
 
-# QoS 2 で Publish
 result = client.publish(topic, payload="Hello MQTT QoS 2", qos=2)
-
-# QoS 2 では4-way handshake（PUBLISH, PUBREC, PUBREL, PUBCOMP）が行われる
-# 完了を明示的に待つ場合は wait_for_publish() を使う
 result.wait_for_publish()
-
-# 少し待機して、非同期処理を完了させる
 time.sleep(1)
 
-# 終了処理
+# DISCONNECT プロパティの設定（任意）
+disconnect_properties = Properties(PacketTypes.DISCONNECT)
+disconnect_properties.UserProperty = [("reason", "shutdown")]
+disconnect_properties.SessionExpiryInterval = 999
+disconnect_properties.ServerReference = "your.server.address" 
+# ✅ ReasonCode を使って正常切断
+client.disconnect(
+    reasoncode=ReasonCode(PacketTypes.DISCONNECT, "Normal disconnection"),
+    properties=disconnect_properties
+)
+
 client.loop_stop()
-client.disconnect()

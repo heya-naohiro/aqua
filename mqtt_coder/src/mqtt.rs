@@ -2771,7 +2771,7 @@ impl MqttPacket for Disconnect {
                     }
                     PROPERTY_SERVER_REFERENCE => {
                         let result;
-                        (result, next_pos) = ServerReference::try_from(buf, next_pos)?;
+                        (result, next_pos) = ServerReference::try_from(buf, next_pos + 1)?;
                         disconnect_pro.server_reference = Some(result);          
                     }
 
@@ -2904,6 +2904,7 @@ pub mod decoder {
 
 #[cfg(test)]
 mod tests {
+    use axum::serve::Serve;
     use bytes::Buf;
 
     use super::decoder::*;
@@ -3438,7 +3439,7 @@ fn mqtt5_subscribe_full_parse() {
         let (packet, consumed, remaining_header) = ret.unwrap();
         b.advance(consumed);
         if let ControlPacket::UNSUBSCRIBE(mut unsubscribe) = packet {
-            let ret = unsubscribe.decode_variable_header(&b, 0, remaining_header, Some(mqtt::ProtocolVersion(5)));
+            let ret = unsubscribe.decode_variable_header(&b, 0, remaining_header, Some(mqtt::ProtocolVersion(4)));
             assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
             
             let next_pos = ret.unwrap();
@@ -3634,6 +3635,94 @@ fn mqtt5_subscribe_full_parse() {
         };
         let result_bytes = pubcomp.encode_header().unwrap();
         assert_eq!(result_bytes.as_ref(), expected);
+    }
+    // e01a00181100000000260006726561736f6e000873687574646f776e
+
+    #[test]
+    fn disconnect_mqtt5() {
+        let input = "e030002e11000003e71c0013796f75722e7365727665722e61646472657373260006726561736f6e000873687574646f776e";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(4)));
+        assert!(ret.is_ok());
+        let (packet, consumed, remaining_length) = ret.unwrap();
+        b.advance(consumed);
+        if let ControlPacket::DISCONNECT(mut disconnect) = packet {
+            let ret = disconnect.decode_variable_header(&b, 0, remaining_length, Some(mqtt::ProtocolVersion(5)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+    
+            let res = disconnect.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+            assert_eq!(
+                disconnect.reason_code,
+                DisconnectReasonCode::NormalDisconnection,
+                "Unexpected reason code: {:?}",
+                disconnect.reason_code
+            );
+
+            assert_eq!(
+                disconnect.reason_code,
+                DisconnectReasonCode::NormalDisconnection,
+                "Unexpected reason code: {:?}",
+                disconnect.reason_code
+            );
+
+            let props = disconnect
+                .disconnect_properties
+                .as_ref()
+                .expect("disconnect_properties が存在しない");
+
+            let user_props = props
+                .user_properties
+                .as_ref()
+                .expect("user_properties が存在しない");
+
+            assert!(
+                user_props.iter().any(|up| {
+                    let (k, v) = &up.0;
+                    k == "reason" && v == "shutdown"
+                }),
+                "UserProperties に (\"reason\", \"shutdown\") が含まれていない: {:?}",
+                user_props
+            );
+
+            assert_eq!(
+                props.session_expiry_interval,
+                Some(SessionExpiryInterval(999)),
+                "Unexpected session_expiry_interval"
+            );
+
+            assert_eq!(
+                props.server_reference,
+                Some(ServerReference("your.server.address".to_string())),
+                "Unexpected server_reference"
+            );
+        } else {
+            panic!("test fail, not disconnect");
+        }
+    }
+    
+    // e000
+  #[test]
+    fn disconnect_mqtt3() {
+        let input = "e000";
+        let mut b = decode_hex(input);
+        let ret = decode_fixed_header(&b, 0, Some(mqtt::ProtocolVersion(4)));
+        assert!(ret.is_ok());
+        let (packet, consumed, remaining_header) = ret.unwrap();
+        b.advance(consumed);
+        if let ControlPacket::DISCONNECT(mut disconnect) = packet {
+            let ret = disconnect.decode_variable_header(&b, 0, remaining_header, Some(mqtt::ProtocolVersion(4)));
+            assert!(ret.is_ok(), "Error: {}", ret.unwrap_err());
+            
+            let next_pos = ret.unwrap();
+            b.advance(next_pos);
+            let res = disconnect.decode_payload(b, Some(mqtt::ProtocolVersion(5)));
+            assert!(res.is_ok());
+        } else {
+            panic!("not disconnect, expect disconnect");
+        }
     }
 
     // 62020001
