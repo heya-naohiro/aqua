@@ -26,6 +26,7 @@ pub enum ControlPacket {
     #[default]
     UNDEFINED,
     NOOPERATION,
+    DISCONNECTCPOPERATION,
     SUBSCRIBE(Subscribe),
     SUBACK(Suback),
     PINGREQ(Pingreq),

@@ -37,6 +37,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let topic_mgr = Arc::clone(&topic_mgr);
                     Box::pin(async move {
                         match req.body {
+                            ControlPacket::DISCONNECT(_disconnect) => {
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
+                                drop(mqtt_id_guard);
+                                if !mqtt_id.is_empty() {
+                                    SESSION_MANAGER.unregister_mqtt_id(mqtt_id.clone());
+                                    trace!(
+                                        "DISCONNECT: MQTT ID '{}' unregistered",
+                                        mqtt_id.clone()
+                                    );
+                                } else {
+                                    trace!("DISCONNECT: MQTT ID was empty; nothing to unregister");
+                                }
+                                Ok(response::Response::new(ControlPacket::NOOPERATION))
+                            }
                             ControlPacket::PINGREQ(_ping) => {
                                 return Ok::<response::Response, MqttError>(
                                     response::Response::new(ControlPacket::PINGRESP(Pingresp {})),

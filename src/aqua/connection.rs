@@ -25,7 +25,6 @@ use tokio_util::io::poll_read_buf;
 use tower::Service;
 use tracing::trace;
 use uuid::Uuid;
-
 //const BUFFER_CAPACITY: usize = 4096;
 const CHANNEL_CAPACITY: usize = 32;
 use crate::aqua::connection::session_manager::SessionManager;
@@ -142,6 +141,9 @@ where
                     }
                 }
             }
+            if let Err(e) = writer.shutdown().await {
+                eprintln!("Writer shutdown failed: {:?}", e);
+            }
         })
     }
 }
@@ -241,10 +243,6 @@ where
                         return Poll::Pending;
                     }
                 };
-                if let ControlPacket::DISCONNECT(_) = req.body {
-                    // -> DropでClose処理を行う
-                    return Poll::Ready(Ok(()));
-                }
                 let fut = Box::pin((this.service).call(req));
                 trace!("state: new_state = Some(ConnectionState::ProcessingService(fut));");
                 new_state = Some(ConnectionState::ProcessingService(fut));
@@ -268,6 +266,9 @@ where
             ConnectionState::WritingPacket(res) => {
                 trace!("state: ConnectionState::WritingPacket(res)");
                 match res.packet {
+                    ControlPacket::DISCONNECTCPOPERATION => {
+                        return Poll::Ready(Ok(()));
+                    }
                     ControlPacket::NOOPERATION => {}
                     _ => {
                         match this.tx.try_send(response::Response::new(res.packet)) {
