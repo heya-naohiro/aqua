@@ -15,6 +15,9 @@ pub enum MqttError {
     NotImplemented,
     #[error("Unexpected")]
     Unexpected,
+    #[error("Invalid Remaining Length")]
+    InvalidRemainingLength
+
 }
 
 #[derive(Default, Debug)]
@@ -1364,10 +1367,11 @@ fn decode_lower_fixed_header(
     buf: &bytes::BytesMut,
     start_pos: usize,
 ) -> Result<(Dup, QoS, Retain), MqttError> {
-    let q = match (buf[start_pos] & 0b0000110) >> 1 {
+    trace!("QoS!!! {}", (buf[start_pos] & 0b0000_0110) >> 1 );
+    let q = match (buf[start_pos] & 0b0000_0110) >> 1 {
         0b00 => QoS::QoS0,
         0b01 => QoS::QoS1,
-        0b11 => QoS::QoS2,
+        0b10 => QoS::QoS2,
         _ => return Err(MqttError::InvalidFormat),
     };
 
@@ -2134,7 +2138,11 @@ pub fn decode_variable_length(
             return Ok((remaining_length, pos + 1)); // 次のバイト位置を返す
         }
         inc += 1;
+        if inc >= 4 {
+            return Err(MqttError::InvalidRemainingLength);
+        }
     }
+    
     Ok((remaining_length, start_pos + 4)) // 全4バイトを処理した場合も次の位置を返す
 }
 
@@ -2806,6 +2814,8 @@ impl MqttPacket for Disconnect {
 pub mod decoder {
     use tracing::trace;
 
+    use crate::mqtt::Unsubscribe;
+
     use super::{
         decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, ProtocolVersion, Publish, Pubrel, Subscribe
     };
@@ -2839,11 +2849,13 @@ pub mod decoder {
             }
             // PUBLISH
             0b0011 => {
+                trace!("PUBLISH!!!!!!!!!");
                 let (dup, qos, retain) = decode_lower_fixed_header(buf, start_pos)?;
                 trace!("Buf (hex): {}", buf.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" "));
                 trace!("QoS: {:?}, start_pos: {}", qos, start_pos);
 
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                trace!("remaining_length: {}", remaining_length);
                 return Ok((
                     ControlPacket::PUBLISH(Publish {
                         qos: qos,
@@ -2878,13 +2890,14 @@ pub mod decoder {
                 }
                 let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
                 return Ok((
-                    ControlPacket::SUBSCRIBE(Subscribe {
+                    ControlPacket::UNSUBSCRIBE(Unsubscribe {
                         ..Default::default()
                     }),
                     next_pos,
                     remaining_length
                 ))
             }
+            // PUBREL
             0b0110 => {
                 if buf[0] != 0b01100010 {
                     return Err(MqttError::InvalidFormat);

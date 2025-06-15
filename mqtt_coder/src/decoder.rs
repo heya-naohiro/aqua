@@ -42,10 +42,7 @@ impl Decoder {
         match &mut self.state {
             // next ( or first)
             DecoderState::Done => {
-                trace!("New Decode start");
-                // decode fixed header
-                // packetは状態が変わるとムーブする、性能面で気になる場合はBox<ControlPacket>に変更する
-                // [TODO] 後ほどの最適化でString->&strへの変更も 含めて？やる！！
+                trace!("New Decode start {:?}", self.buf);
                 match mqtt::decoder::decode_fixed_header(&self.buf, 0, self.protocol_version) {
                     Ok(result) => {
                         let next_pos;
@@ -88,7 +85,6 @@ impl Decoder {
                 let buf = std::mem::take(&mut self.buf);
                 match self.tmp_packet.decode_payload(buf, self.protocol_version) {
                     Ok(remaining_buf) => {
-                        trace!("DecoderState::VariableHeaderDecoded");
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::Done;
                         self.buf = remaining_buf;

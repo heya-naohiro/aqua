@@ -8,7 +8,7 @@ BROKER = "localhost"
 PORT = 1883
 
 # ===============================
-# サブスクライブ対象のトピックとQoS
+# サブスクライブ＆パブリッシュ対象のトピックとQoS
 # ===============================
 TOPIC_QOS_LIST = [
     ("topic/test/qos0", 0),
@@ -26,6 +26,11 @@ def on_connect(client, userdata, flags, rc):
         print(f"Subscribing to: {topic} with QoS: {qos}")
         client.subscribe(topic, qos)
 
+        # QoS に応じたメッセージを Publish
+        payload = f"Hello from client using QoS {qos}"
+        print(f"Publishing to: {topic} with QoS: {qos} | Payload: {payload}")
+        client.publish(topic, payload, qos=qos)
+
 def on_subscribe(client, userdata, mid, granted_qos):
     print(f"[on_subscribe] MID: {mid} | Granted QoS: {granted_qos}")
 
@@ -35,13 +40,14 @@ def on_message(client, userdata, msg):
 # ===============================
 # クライアント作成（MQTT v3.1.1）
 # ===============================
-client = mqtt.Client(client_id="mqtt-v3-subscriber", protocol=mqtt.MQTTv311)
+client = mqtt.Client(client_id="mqtt-v3-client", protocol=mqtt.MQTTv311)
 
 # コールバック登録
 client.on_connect = on_connect
 client.on_subscribe = on_subscribe
 client.on_message = on_message
 
+# 接続 & ループ開始
 client.connect(BROKER, PORT, keepalive=60)
 client.loop_start()
 
@@ -51,7 +57,6 @@ try:
 except KeyboardInterrupt:
     print("Interrupt received. Unsubscribing from topics and disconnecting...")
 
-    # トピック名だけをリストにしてまとめて Unsubscribe
     unsubscribe_topics = [topic for topic, _ in TOPIC_QOS_LIST]
     client.unsubscribe(unsubscribe_topics)
 

@@ -333,6 +333,7 @@ where
         match this.decoder.poll_decode(cx) {
             Poll::Ready(Ok(p)) => {
                 trace!("decode packet {:?}", p);
+                trace!("rest {:?}", &this.decoder.buf);
                 Poll::Ready(Ok(Request::new(p)))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
