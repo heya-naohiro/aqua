@@ -1,4 +1,5 @@
 use aqua::session_manager;
+use aqua::ConnackError;
 use aqua::ConnackResponse;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
@@ -32,12 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let peer = incoming.addr;
             async move {
                 Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
-                    trace!("(normal) New connection from: {:?}", peer);
+                    trace!("(normal) {:?} {:?}", peer, req.body);
                     let mqtt_id_lock = mqtt_id_lock.clone();
                     let topic_mgr = Arc::clone(&topic_mgr);
+
                     Box::pin(async move {
                         match req.body {
                             ControlPacket::DISCONNECT(_disconnect) => {
+                                trace!("Disconnect");
                                 let mqtt_id_guard = mqtt_id_lock.read().await;
                                 let mqtt_id = mqtt_id_guard.clone();
                                 drop(mqtt_id_guard);
@@ -53,11 +56,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Ok(response::Response::new(ControlPacket::NOOPERATION))
                             }
                             ControlPacket::PINGREQ(_ping) => {
+                                trace!("pingreq");
                                 return Ok::<response::Response, MqttError>(
                                     response::Response::new(ControlPacket::PINGRESP(Pingresp {})),
                                 );
                             }
                             ControlPacket::SUBSCRIBE(subpacket) => {
+                                trace!("subscribe");
                                 let mut success_codes = vec![];
                                 let guard = mqtt_id_lock.read().await;
                                 let mqtt_id: String = guard.clone();
@@ -79,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 })));
                             }
                             ControlPacket::PUBLISH(pubpacket) => {
+                                trace!("publish");
                                 let topic_mgr = Arc::clone(&topic_mgr);
                                 let pubpacket_clone_for_spawn = pubpacket.clone();
                                 let qos = pubpacket.qos;
@@ -138,8 +144,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
-                            _ => {
-                                return Ok(response::Response::default());
+                            ControlPacket::CONNECT(_) => {
+                                trace!(
+                                    "Protocol error: CONNECT received after session established"
+                                );
+                                return Err(mqtt::MqttError::ProtocolViolation);
+                            }
+
+                            ControlPacket::PUBREL(pubrel_packet) => {
+                                trace!("pubrel!!!!!!!!!!");
+                                // PUBREL受信時の処理を追加する必要があります
+                                let packet_id = pubrel_packet.packet_id;
+                                // QoS2ステージングメッセージから該当メッセージを取り出す処理も必要（実装済みなら呼ぶ）
+                                //SESSION_MANAGER.remove_staging_packet(packet_id);
+
+                                return Ok(response::Response::new(ControlPacket::PUBCOMP(
+                                    mqtt::Pubcomp {
+                                        packet_id,
+                                        pubcomp_reason: Some(mqtt::PubcompReasonCode::Success),
+                                        pubcomp_properties: None,
+                                        protocol_version: pubrel_packet.protocol_version,
+                                    },
+                                )));
+                            }
+                            other => {
+                                trace!("other {:?}", other);
+                                return Ok(response::Response::new(ControlPacket::NOOPERATION));
+                                //return Ok(response::Response::default(response::Response::new());
                             }
                         }
                     })
@@ -179,7 +210,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     _ => {
                         println!("(connect) Received non-CONNECT packet");
-                        Ok(ConnackResponse::default())
+                        Err(ConnackError {
+                            reason_code: mqtt::ConnackReason::ProtocolError, // 例として ProtocolError
+                        })
                     }
                 }
             })

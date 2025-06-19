@@ -122,7 +122,6 @@ where
                     Ok(()) => {}
                     Err(e) => {
                         trace!("Encode error: {:?}", &packet);
-                        eprintln!("Encode error: {:?}", e);
                         return;
                     }
                 }
@@ -264,9 +263,9 @@ where
                 trace!("state: new_state = Some(ConnectionState::WritingPacket(response));");
             }
             ConnectionState::WritingPacket(res) => {
-                trace!("state: ConnectionState::WritingPacket(res)");
+                trace!("state: ConnectionState::WritingPacket(res) {:?}", &res);
                 match res.packet {
-                    ControlPacket::DISCONNECTCPOPERATION => {
+                    ControlPacket::DISCONNECT(_) => {
                         return Poll::Ready(Ok(()));
                     }
                     ControlPacket::NOOPERATION => {}

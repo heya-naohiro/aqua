@@ -16,8 +16,9 @@ pub enum MqttError {
     #[error("Unexpected")]
     Unexpected,
     #[error("Invalid Remaining Length")]
-    InvalidRemainingLength
-
+    InvalidRemainingLength,
+    #[error("protocol violation")]
+    ProtocolViolation
 }
 
 #[derive(Default, Debug)]
