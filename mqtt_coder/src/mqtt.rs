@@ -1696,9 +1696,12 @@ pub struct Connect {
 }
 
 #[derive(PartialEq, Debug, Default, Clone)]
-struct ProtocolName(String);
+pub struct ProtocolName(String);
 
 impl ProtocolName {
+   pub fn value(&self) -> String {
+        self.0.clone()
+    }
     fn try_from(
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -1713,6 +1716,9 @@ impl ProtocolName {
 #[derive(PartialEq, Debug, Default, Clone, Copy)]
 pub struct ProtocolVersion(u8);
 impl ProtocolVersion {
+    pub fn as_u8(self) -> u8 {
+        self.0
+    }
     pub fn new(version: u8) -> Self {
         Self(version)
     }

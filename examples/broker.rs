@@ -3,6 +3,7 @@ use aqua::ConnackError;
 use aqua::ConnackResponse;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
+use axum::routing::connect;
 use mqtt_coder::mqtt::Puback;
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
@@ -186,6 +187,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("(connect) Processing request");
                 match req.body {
                     ControlPacket::CONNECT(connect_data) => {
+                        match (
+                            connect_data.protocol_name.value().as_str(),
+                            connect_data.protocol_ver.as_u8(),
+                        ) {
+                            ("MQTT", 4) | ("MQTT", 5) => { /* continue */ }
+                            ("MQIsdp", 3) => {
+                                // MQTT 3.1 のサポートを行うならここに処理
+                            }
+                            _ => {
+                                // 不正な protocol name / version の組み合わせ
+                                return Err(ConnackError {
+                                    reason_code: mqtt::ConnackReason::ProtocolError, // 例として ProtocolError
+                                });
+                            }
+                        };
                         let connack_data = Connack {
                             session_present: false,
                             connect_reason: mqtt::ConnackReason::Success,
