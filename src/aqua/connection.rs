@@ -23,6 +23,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
+use tracing::debug;
 use tracing::trace;
 use uuid::Uuid;
 //const BUFFER_CAPACITY: usize = 4096;
@@ -56,6 +57,7 @@ where
     write_buffer: BytesMut,
     decoder: decoder::Decoder,
     encoder: encoder::Encoder,
+    protocol_version: Option<mqtt::ProtocolVersion>,
 }
 
 #[derive(Default)]
@@ -89,7 +91,6 @@ where
         let write_task = Self::spawn_writer(writer, rx);
 
         let outbound = session_manager::Outbound::new(tx.clone());
-        //trace!("new connection, register_client_id {:?}", client_id);
         SESSION_MANAGER.register_client_id(client_id, outbound);
         eprintln!(
             "=== Connection::new() called with client_id {:?}",
@@ -106,6 +107,7 @@ where
             write_buffer: BytesMut::new(),
             decoder: decoder::Decoder::new(),
             encoder: encoder::Encoder::new(),
+            protocol_version: None,
         }
     }
 
@@ -118,10 +120,11 @@ where
             let mut write_buffer = BytesMut::new();
             while let Some(res) = rx.recv().await {
                 let packet = res.packet;
+                debug!("Encoding and Sending Packet {:?}", packet);
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
-                        trace!("Encode error: {:?}", &packet);
+                        trace!("Encode error: {:?} {:?}", &packet, e);
                         return;
                     }
                 }
@@ -175,6 +178,7 @@ where
                     Poll::Ready(Ok(req)) => {
                         if let ControlPacket::CONNECT(ref packet) = req.body {
                             // here ??
+                            this.protocol_version = Some(packet.protocol_ver);
                             this.decoder.set_protocol_version(Some(packet.protocol_ver));
                             req
                         } else {

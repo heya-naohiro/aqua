@@ -77,6 +77,10 @@ impl MqttPacket for ControlPacket {
             ControlPacket::PINGREQ(p) => p.decode_payload(buf, protocol_version),
             ControlPacket::PUBREL(p) => p.decode_payload(buf, protocol_version),
             ControlPacket::DISCONNECT(p) => p.decode_payload(buf, protocol_version),
+            // PUBACK, PUBREC, PUBCOMP have no payload
+            ControlPacket::PUBACK(_) => Ok(buf),
+            ControlPacket::PUBREC(_) => Ok(buf),
+            ControlPacket::PUBCOMP(_) => Ok(buf),
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -94,6 +98,26 @@ impl MqttPacket for ControlPacket {
             ControlPacket::UNSUBSCRIBE(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
             ControlPacket::PINGREQ(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
             ControlPacket::DISCONNECT(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
+            ControlPacket::PUBREL(p) => p.decode_variable_header(buf, start_pos, remaining_length, protocol_version),
+            // Simple variable header decoders for QoS packets
+            ControlPacket::PUBACK(p) => {
+                let (packet_id, next_pos) = mqtt::PacketId::try_from(buf, start_pos)?;
+                p.packet_id = packet_id;
+                p.protocol_version = protocol_version.unwrap_or_default();
+                Ok(next_pos)
+            },
+            ControlPacket::PUBREC(p) => {
+                let (packet_id, next_pos) = mqtt::PacketId::try_from(buf, start_pos)?;
+                p.packet_id = packet_id;
+                p.protocol_version = protocol_version.unwrap_or_default();
+                Ok(next_pos)
+            },
+            ControlPacket::PUBCOMP(p) => {
+                let (packet_id, next_pos) = mqtt::PacketId::try_from(buf, start_pos)?;
+                p.packet_id = packet_id;
+                p.protocol_version = protocol_version.unwrap_or_default();
+                Ok(next_pos)
+            },
             _ => Err(MqttError::NotImplemented),
         }
     }
@@ -104,6 +128,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::SUBACK(p) => p.encode_header(),
             ControlPacket::PUBACK(p) => p.encode_header(),
             ControlPacket::PUBREC(p) => p.encode_header(),
+            ControlPacket::PUBREL(p) => p.encode_header(),
             ControlPacket::PUBCOMP(p) => p.encode_header(),
             ControlPacket::UNSUBACK(p) => p.encode_header(),
             ControlPacket::PUBLISH(p) => p.encode_header(),
@@ -118,6 +143,7 @@ impl MqttPacket for ControlPacket {
             ControlPacket::SUBACK(p) => p.encode_payload_chunk(),
             ControlPacket::PUBACK(p) => p.encode_payload_chunk(),
             ControlPacket::PUBREC(p) => p.encode_payload_chunk(),
+            ControlPacket::PUBREL(p) => p.encode_payload_chunk(),
             ControlPacket::PUBCOMP(p) => p.encode_payload_chunk(),
             ControlPacket::UNSUBACK(p) => p.encode_payload_chunk(),
             ControlPacket::PUBLISH(p) => p.encode_payload_chunk(),
@@ -525,10 +551,16 @@ pub struct Puback {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(PartialEq, Debug, Default, Clone)]
+#[derive(PartialEq, Debug, Clone, Default)]
 pub struct PubackProperties {
-    reason_string: Option<ReasonString>,
-    user_properties: Vec<UserProperty>,
+    pub reason_string: Option<ReasonString>,
+    pub user_properties: Vec<UserProperty>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct PubrelProperties {
+    pub reason_string: Option<ReasonString>,
+    pub user_properties: Vec<UserProperty>,
 }
 
 #[repr(u8)]
@@ -578,7 +610,7 @@ impl Puback {
         let mut encoded_property_length = Vec::new();
         let remaining_length;
         if self.protocol_version.value() >= 5 { /* MQTT5 */
-            if  let Some(_) = self.reason_code {
+            if let Some(_) = self.reason_code {
                 pro = self.puback_properties.clone().unwrap_or(PubackProperties::default()).build_bytes()?;
                 let property_length = pro.len();
                 encoded_property_length = encode_variable_bytes(property_length);
@@ -719,7 +751,7 @@ impl Pubrec {
 }
 
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Pubrel {
     pub packet_id: PacketId,
     pub pubrel_properties: Option<PubrelProperties>,
@@ -727,11 +759,6 @@ pub struct Pubrel {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(PartialEq, Debug, Default)]
-struct PubrelProperties {
-    reason_string: Option<ReasonString>,
-    user_properties: Vec<UserProperty>,
-}
 
 impl PubrelProperties {
     fn new() -> Self {
@@ -744,12 +771,40 @@ impl PubrelProperties {
         self.user_properties
             .push(prop);
     }
+    
+    pub fn encode(&self) -> Result<Bytes, MqttError> {
+        let mut buf = BytesMut::new();
+        if let Some(c) = &self.reason_string {
+            let c = c.clone().into_inner();
+            buf.extend_from_slice(&[0x1f]);
+            let l: u16 = c.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(c.as_bytes());
+        }
+        for v in &self.user_properties {
+            let v = v.clone().into_inner();
+            buf.extend_from_slice(&[0x26]);
+            let l: u16 = v.0.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.0.as_bytes());
+            let l: u16 = v.1.len().try_into().map_err(|_| MqttError::InvalidFormat)?;
+            buf.extend_from_slice(&l.to_be_bytes());
+            buf.extend_from_slice(v.1.as_bytes());
+        }
+        Ok(buf.freeze())
+    }
+}
+
+impl Default for PubrelProperties {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum PubrelReasonCode {
+pub enum PubrelReasonCode {
     Success = 0x00,
     PacketIdentifierNotFound = 0x92,
 }
@@ -769,7 +824,7 @@ impl PubrelReasonCode {
     }
 }
 
-impl Pubrel {
+impl MqttPacket for Pubrel {
     fn decode_variable_header(
         &mut self,
         buf: &bytes::BytesMut,
@@ -827,6 +882,51 @@ impl Pubrel {
     ) -> Result<bytes::BytesMut, MqttError> {
         // no payload
         Ok(buf)
+    }
+    
+    fn encode_header(&self) -> Result<Bytes, MqttError> {
+        let mut pro = bytes::Bytes::new();
+        let mut encoded_property_length = Vec::new();
+        let remaining_length;
+        let omit = (self.reason_code == None) && (self.pubrel_properties == None);
+        // Properties
+        if self.protocol_version.value() >= 5 && !omit { /* MQTT5 */
+            pro = self.pubrel_properties.clone().unwrap_or(PubrelProperties::default()).encode()?;
+            let property_length = pro.len();
+            encoded_property_length = encode_variable_bytes(property_length);
+            remaining_length = 2 /* id */ + 1 /* reason */ + encoded_property_length.len() + pro.len();
+         } else {
+            /* MQTT3 もしくは自明な場合(omit)では常に2byteとなる*/
+            remaining_length = 2;
+        }
+        let encoded_remaining_length = encode_variable_bytes(remaining_length);
+
+        let mut buf = BytesMut::with_capacity(remaining_length + 4 /* fix header */);
+        /* Fixed header */
+        buf.put_u8(0b01100010); // PUBREL fixed flags
+        /* remaining length */
+
+        buf.extend_from_slice(&encoded_remaining_length);
+        /* Variable header */
+        // Packet ID
+        buf.put_u16(self.packet_id.value());
+
+        if self.protocol_version.value() >= 5 && !omit {
+            if let Some(reason_code) = self.reason_code {
+                /* Reason code */
+                buf.put_u8(reason_code as u8);
+                /* Properties Length */
+                buf.extend_from_slice(&encoded_property_length);
+                /* Properties */
+                buf.extend_from_slice(&pro);
+            }
+
+        }
+        Ok(buf.freeze())
+    }
+    
+    fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        Ok(None)
     }
 }
 
@@ -1262,7 +1362,7 @@ pub enum SubackProperty {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-struct ReasonString(String);
+pub struct ReasonString(String);
 impl ReasonString {
     fn try_from(
         buf: &bytes::BytesMut,
@@ -1403,9 +1503,13 @@ impl TopicName {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Default)]
+#[derive(Debug, PartialEq, Clone, Default, Copy)]
 pub struct PacketId(u16);
 impl PacketId {
+    pub fn new(id: u16) -> Self {
+        PacketId(id)
+    }
+    
     fn try_from(
         buf: &bytes::BytesMut,
         start_pos: usize,
@@ -2824,7 +2928,7 @@ pub mod decoder {
     use crate::mqtt::Unsubscribe;
 
     use super::{
-        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, ProtocolVersion, Publish, Pubrel, Subscribe
+        decode_lower_fixed_header, decode_variable_length, Connect, ControlPacket, Disconnect, MqttError, ProtocolVersion, Publish, Pubrel, Subscribe, Puback, Pubrec, Pubcomp
     };
     // (, next_pos size)
     pub fn decode_fixed_header(
@@ -2874,6 +2978,53 @@ pub mod decoder {
                     remaining_length,
                 ));
             },
+            // PUBACK
+            0b0100 => {
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBACK(Puback {
+                        ..Default::default()
+                    }),
+                    next_pos,
+                    remaining_length,
+                ));
+            }
+            // PUBREC
+            0b0101 => {
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBREC(Pubrec {
+                        ..Default::default()
+                    }),
+                    next_pos,
+                    remaining_length,
+                ));
+            }
+            // PUBREL
+            0b0110 => {
+                if buf[0] != 0b01100010 {
+                    return Err(MqttError::InvalidFormat);
+                }
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBREL(Pubrel {
+                        ..Default::default()
+                    }),
+                    next_pos,
+                    remaining_length,
+                ));
+            }
+            // PUBCOMP
+            0b0111 => {
+                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
+                return Ok((
+                    ControlPacket::PUBCOMP(Pubcomp {
+                        ..Default::default()
+                    }),
+                    next_pos,
+                    remaining_length,
+                ));
+            }
             // SUBSCRIBE
             0b1000 => {
                 if buf[0] != 0b10000010 {
@@ -2902,20 +3053,6 @@ pub mod decoder {
                     }),
                     next_pos,
                     remaining_length
-                ))
-            }
-            // PUBREL
-            0b0110 => {
-                if buf[0] != 0b01100010 {
-                    return Err(MqttError::InvalidFormat);
-                }
-                let (remaining_length, next_pos) = decode_variable_length(buf, start_pos + 1)?;
-                return Ok((
-                    ControlPacket::PUBREL(Pubrel {
-                        ..Default::default()
-                    }),
-                    next_pos,
-                    remaining_length,
                 ))
             }
             _control_type => return Err(MqttError::InvalidFormat),
@@ -3872,5 +4009,3 @@ fn mqtt5_subscribe_full_parse() {
     
 
 }
-
-
