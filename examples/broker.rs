@@ -15,13 +15,14 @@ use tokio;
 use tokio::net::TcpListener;
 use topic_manager::TopicManager;
 use tower::service_fn;
+use tracing::debug;
 use tracing::trace;
 use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG) // ここが重要！
+        .with_max_level(tracing::Level::TRACE) // ここが重要！
         .init();
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let topic_mgr = Arc::clone(&topic_mgr);
 
                     Box::pin(async move {
+                        debug!("-- Recieve: {:?}", req.body);
                         match req.body {
                             ControlPacket::DISCONNECT(_disconnect) => {
                                 trace!("Disconnect");
@@ -86,8 +88,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 })));
                             }
-                            ControlPacket::PUBLISH(pubpacket) => {
+                            ControlPacket::PUBLISH(mut pubpacket) => {
                                 trace!("publish");
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
+                                drop(mqtt_id_guard);
+                                let version = SESSION_MANAGER
+                                    .get_protocol_version(&mqtt_id)
+                                    .unwrap_or(ProtocolVersion::new(0x04));
+                                pubpacket.protocol_version = version;
+                                let qos = pubpacket.qos;
+                                if qos == mqtt::QoS::QoS2 {
+                                    assert!(
+                                        pubpacket.packet_id.is_some(),
+                                        "QoS2 publish must have packet_id but got None"
+                                    );
+                                }
                                 let qos = pubpacket.qos;
 
                                 let packet_id = match pubpacket.packet_id {
@@ -102,12 +118,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if qos == mqtt::QoS::QoS2 {
                                     SESSION_MANAGER
                                         .add_staging_packet(pubpacket.clone(), mqtt::QoS::QoS2);
+                                    let mqtt_id_guard = mqtt_id_lock.read().await;
+                                    let mqtt_id = mqtt_id_guard.clone();
+                                    drop(mqtt_id_guard);
+                                    let version = SESSION_MANAGER
+                                        .get_protocol_version(&mqtt_id)
+                                        .unwrap_or(ProtocolVersion::new(0x04));
                                     return Ok(response::Response::new(ControlPacket::PUBREC(
                                         mqtt::Pubrec {
                                             packet_id,
                                             reason_code: Some(mqtt::PubrecReasonCode::Success),
                                             pubrec_properties: None,
-                                            protocol_version: pubpacket.protocol_version,
+                                            protocol_version: version,
                                         },
                                     )));
                                 }
@@ -157,12 +179,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ));
                                     }
                                     mqtt::QoS::QoS1 => {
+                                        let mqtt_id_guard = mqtt_id_lock.read().await;
+                                        let mqtt_id = mqtt_id_guard.clone();
+                                        let version = SESSION_MANAGER
+                                            .get_protocol_version(&mqtt_id)
+                                            .unwrap_or(ProtocolVersion::new(0x04));
                                         return Ok(response::Response::new(ControlPacket::PUBACK(
                                             Puback {
                                                 reason_code: None,
                                                 packet_id: pubpacket.packet_id.unwrap(),
                                                 puback_properties: None,
-                                                protocol_version: pubpacket.protocol_version,
+                                                protocol_version: version,
                                             },
                                         )));
                                     }
@@ -179,7 +206,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ControlPacket::PUBREL(pubrel_packet) => {
                                 trace!("pubrel!!!!!!!!!!");
                                 let packet_id_outer = pubrel_packet.packet_id.clone();
-
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
+                                let version = SESSION_MANAGER
+                                    .get_protocol_version(&mqtt_id)
+                                    .unwrap_or(ProtocolVersion::new(0x04));
                                 // QoS2ステージングメッセージから該当メッセージを取り出して配信
                                 if let Ok(staged_publish) =
                                     SESSION_MANAGER.fetch_packet(packet_id_outer.clone())
@@ -223,23 +254,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         packet_id: packet_id_outer,
                                         pubcomp_reason: Some(mqtt::PubcompReasonCode::Success),
                                         pubcomp_properties: None,
-                                        protocol_version: pubrel_packet.protocol_version,
+                                        protocol_version: version,
                                     },
                                 )));
                             }
                             ControlPacket::PUBREC(pubrec_packet) => {
                                 trace!("Received PUBREC from subscriber");
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
                                 // 受信者からのPUBRECに対してPUBRELで応答
                                 return Ok(response::Response::new(ControlPacket::PUBREL(
                                     mqtt::Pubrel {
                                         packet_id: pubrec_packet.packet_id,
                                         pubrel_properties: None,
                                         reason_code: None,
-                                        protocol_version: pubrec_packet.protocol_version,
+                                        protocol_version: SESSION_MANAGER
+                                            .get_protocol_version(&mqtt_id)
+                                            .unwrap_or(ProtocolVersion::new(0x04)),
                                     },
                                 )));
                             }
-                            ControlPacket::PUBCOMP(pubcomp_packet) => {
+                            ControlPacket::PUBCOMP(_pubcomp_packet) => {
                                 trace!(
                                     "Received PUBCOMP from subscriber - QoS2 handshake complete"
                                 );

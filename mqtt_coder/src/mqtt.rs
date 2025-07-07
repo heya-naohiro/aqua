@@ -1,7 +1,7 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use thiserror::Error;
-use tracing::trace;
+use tracing::{debug, trace};
 use num_enum::TryFromPrimitive;
 
 use crate::mqtt;
@@ -832,9 +832,11 @@ impl MqttPacket for Pubrel {
         remaining_length: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
+        debug!("decode variable header {:?} / {:?} / {:?}/{:?}", &buf, &start_pos, &remaining_length, &protocol_version);
         let mut next_pos = start_pos;
         (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
         if remaining_length == 2 {
+            debug!("heare !!! {:?}", &next_pos);
             return Ok(next_pos);
         }
         let (reason_code, mut next_pos) = PubrelReasonCode::try_from(buf, next_pos)?;
@@ -881,6 +883,7 @@ impl MqttPacket for Pubrel {
         _protocol_version: Option<ProtocolVersion>,
     ) -> Result<bytes::BytesMut, MqttError> {
         // no payload
+        debug!("decode payload!!!!!!!!!!!!!!!");
         Ok(buf)
     }
     
@@ -926,6 +929,7 @@ impl MqttPacket for Pubrel {
     }
     
     fn encode_payload_chunk(&self) -> Result<Option<Bytes>, MqttError> {
+        // not exist payload
         Ok(None)
     }
 }

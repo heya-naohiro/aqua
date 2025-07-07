@@ -120,7 +120,7 @@ where
             let mut write_buffer = BytesMut::new();
             while let Some(res) = rx.recv().await {
                 let packet = res.packet;
-                debug!("Encoding and Sending Packet {:?}", packet);
+                debug!("-- Sending {:?}", packet);
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
@@ -233,10 +233,7 @@ where
             ConnectionState::ReadingPacket => {
                 trace!("state: ConnectionState::ReadingPacket");
                 let req = match this.as_mut().read_packet(cx) {
-                    Poll::Ready(Ok(req)) => {
-                        trace!("read packet done!!");
-                        req
-                    }
+                    Poll::Ready(Ok(req)) => req,
                     Poll::Ready(Err(e)) => {
                         trace!("Error");
                         return Poll::Ready(Err(e));
@@ -319,6 +316,7 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
+        debug!("read packet");
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
@@ -331,6 +329,7 @@ where
             }
             Poll::Pending => {
                 // fallthrough
+                debug!("pending fallthrough");
             }
         }
         match this.decoder.poll_decode(cx) {
@@ -340,7 +339,10 @@ where
                 Poll::Ready(Ok(Request::new(p)))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                debug!("poll decode : Pending");
+                return Poll::Pending;
+            }
         }
     }
 }

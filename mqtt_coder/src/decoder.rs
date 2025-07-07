@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use bytes::{Buf, BytesMut};
 
 use crate::mqtt::{self, ControlPacket, MqttError, MqttPacket};
-use tracing::trace;
+use tracing::{debug, trace};
 
 #[derive(Debug)]
 enum DecoderState {
@@ -17,6 +17,7 @@ pub struct Decoder {
     tmp_packet: ControlPacket,
     protocol_version: Option<mqtt::ProtocolVersion>,
     remaining_length: usize,
+    remain_length_counter: usize,
     pub buf: BytesMut,
 }
 
@@ -27,6 +28,7 @@ impl Decoder {
             tmp_packet: ControlPacket::UNDEFINED,
             protocol_version: None,
             remaining_length: 0,
+            remain_length_counter: 0,
             buf: BytesMut::new(),
         }
     }
@@ -37,6 +39,7 @@ impl Decoder {
 
     pub fn poll_decode(&mut self, cx: &mut Context<'_>) -> Poll<Result<ControlPacket, MqttError>> {
         if self.buf.is_empty() {
+            debug!("buf is empty, so return Poll::Pending");
             return Poll::Pending;
         }
         match &mut self.state {
@@ -50,6 +53,11 @@ impl Decoder {
                         self.buf.advance(next_pos);
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::FixedHeaderDecoded;
+
+                        /*
+                        reset remaining legnth counter
+                         */
+                        self.remain_length_counter = 0;
                         return Poll::Pending;
                     }
                     Err(err) => {
@@ -70,6 +78,12 @@ impl Decoder {
                 ) {
                     Ok(size) => {
                         self.buf.advance(size);
+                        self.remain_length_counter += size;
+                        if self.remain_length_counter == self.remaining_length {
+                            self.state = DecoderState::Done;
+                            return Poll::Ready(Ok(std::mem::take(&mut self.tmp_packet)));
+                        }
+
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::VariableHeaderDecoded;
                         return Poll::Pending;
