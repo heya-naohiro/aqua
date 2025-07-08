@@ -23,6 +23,8 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
+use tracing::debug;
+use tracing::error;
 use tracing::trace;
 use uuid::Uuid;
 //const BUFFER_CAPACITY: usize = 4096;
@@ -56,6 +58,7 @@ where
     write_buffer: BytesMut,
     decoder: decoder::Decoder,
     encoder: encoder::Encoder,
+    protocol_version: Option<mqtt::ProtocolVersion>,
 }
 
 #[derive(Default)]
@@ -89,7 +92,6 @@ where
         let write_task = Self::spawn_writer(writer, rx);
 
         let outbound = session_manager::Outbound::new(tx.clone());
-        //trace!("new connection, register_client_id {:?}", client_id);
         SESSION_MANAGER.register_client_id(client_id, outbound);
         eprintln!(
             "=== Connection::new() called with client_id {:?}",
@@ -106,6 +108,7 @@ where
             write_buffer: BytesMut::new(),
             decoder: decoder::Decoder::new(),
             encoder: encoder::Encoder::new(),
+            protocol_version: None,
         }
     }
 
@@ -118,10 +121,11 @@ where
             let mut write_buffer = BytesMut::new();
             while let Some(res) = rx.recv().await {
                 let packet = res.packet;
+                debug!("-- Sending {:?}", packet);
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
-                        trace!("Encode error: {:?}", &packet);
+                        error!("Encode error: {:?} {:?}", &packet, e);
                         return;
                     }
                 }
@@ -175,6 +179,7 @@ where
                     Poll::Ready(Ok(req)) => {
                         if let ControlPacket::CONNECT(ref packet) = req.body {
                             // here ??
+                            this.protocol_version = Some(packet.protocol_ver);
                             this.decoder.set_protocol_version(Some(packet.protocol_ver));
                             req
                         } else {
@@ -229,10 +234,7 @@ where
             ConnectionState::ReadingPacket => {
                 trace!("state: ConnectionState::ReadingPacket");
                 let req = match this.as_mut().read_packet(cx) {
-                    Poll::Ready(Ok(req)) => {
-                        trace!("read packet done!!");
-                        req
-                    }
+                    Poll::Ready(Ok(req)) => req,
                     Poll::Ready(Err(e)) => {
                         trace!("Error");
                         return Poll::Ready(Err(e));
@@ -315,6 +317,7 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
+        debug!("read packet");
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
@@ -327,6 +330,7 @@ where
             }
             Poll::Pending => {
                 // fallthrough
+                debug!("pending fallthrough");
             }
         }
         match this.decoder.poll_decode(cx) {
@@ -336,7 +340,10 @@ where
                 Poll::Ready(Ok(Request::new(p)))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                debug!("poll decode : Pending");
+                return Poll::Pending;
+            }
         }
     }
 }

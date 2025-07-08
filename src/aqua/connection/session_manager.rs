@@ -1,6 +1,8 @@
 use crate::aqua::connection::response::Response;
 use dashmap::DashMap;
-use mqtt_coder::mqtt::{ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS};
+use mqtt_coder::mqtt::{
+    self, ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -30,6 +32,7 @@ pub struct SessionManager {
     by_mqtt_id: Arc<DashMap<String, Uuid>>,
     by_client_mqtt: Arc<DashMap<Uuid, String>>,
     qos_tmp: Arc<DashMap<u16, (Publish, QoS)>>,
+    mqtt_version: Arc<DashMap<String, mqtt::ProtocolVersion>>,
 }
 
 impl SessionManager {
@@ -39,6 +42,7 @@ impl SessionManager {
             by_mqtt_id: Arc::new(DashMap::new()),
             by_client_mqtt: Arc::new(DashMap::new()),
             qos_tmp: Arc::new(DashMap::new()),
+            mqtt_version: Arc::new(DashMap::new()),
         }
     }
 
@@ -117,5 +121,13 @@ impl SessionManager {
         self.by_client_mqtt
             .get(client_id)
             .map(|r| r.value().clone())
+    }
+    pub fn get_protocol_version(&self, mqtt_id: &str) -> Option<mqtt::ProtocolVersion> {
+        self.mqtt_version
+            .get(mqtt_id)
+            .map(|entry| entry.value().clone())
+    }
+    pub fn set_protocol_version(&self, mqtt_id: &str, version: mqtt::ProtocolVersion) {
+        self.mqtt_version.insert(mqtt_id.to_string(), version);
     }
 }
