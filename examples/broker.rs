@@ -22,7 +22,6 @@ use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut rng = rand::rng();
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG) // ここが重要！
         .init();
