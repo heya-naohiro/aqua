@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
 use tracing::debug;
+use tracing::error;
 use tracing::trace;
 use uuid::Uuid;
 //const BUFFER_CAPACITY: usize = 4096;
@@ -124,7 +125,7 @@ where
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
-                        trace!("Encode error: {:?} {:?}", &packet, e);
+                        error!("Encode error: {:?} {:?}", &packet, e);
                         return;
                     }
                 }

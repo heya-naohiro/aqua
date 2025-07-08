@@ -8,6 +8,7 @@ use mqtt_coder::mqtt::Puback;
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
 };
+use random_number::random;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,8 +22,9 @@ use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut rng = rand::rng();
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE) // ここが重要！
+        .with_max_level(tracing::Level::DEBUG) // ここが重要！
         .init();
     let str_addr = "127.0.0.1:1883";
     let addr = str_addr.parse::<SocketAddr>().unwrap();
@@ -98,21 +100,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .unwrap_or(ProtocolVersion::new(0x04));
                                 pubpacket.protocol_version = version;
                                 let qos = pubpacket.qos;
+
                                 if qos == mqtt::QoS::QoS2 {
                                     assert!(
                                         pubpacket.packet_id.is_some(),
                                         "QoS2 publish must have packet_id but got None"
                                     );
                                 }
-                                let qos = pubpacket.qos;
-
-                                let packet_id = match pubpacket.packet_id {
-                                    Some(ref id) => id.clone(),
+                                // packet id check
+                                match pubpacket.packet_id {
+                                    Some(_) => {}
                                     None => {
-                                        tracing::error!("Received QoS {:?} PUBLISH with None packet_id. Ignoring packet.", qos);
-                                        return Ok(response::Response::new(
-                                            ControlPacket::NOOPERATION,
-                                        ));
+                                        if qos == mqtt::QoS::QoS1 || qos == mqtt::QoS::QoS2 {
+                                            return Err(mqtt::MqttError::ProtocolViolation);
+                                        }
                                     }
                                 };
                                 if qos == mqtt::QoS::QoS2 {
@@ -126,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .unwrap_or(ProtocolVersion::new(0x04));
                                     return Ok(response::Response::new(ControlPacket::PUBREC(
                                         mqtt::Pubrec {
-                                            packet_id,
+                                            packet_id: pubpacket.packet_id.clone().unwrap(), // 必ず入っている
                                             reason_code: Some(mqtt::PubrecReasonCode::Success),
                                             pubrec_properties: None,
                                             protocol_version: version,
@@ -144,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .value()
                                             .to_string(),
                                     );
-                                    // ここでPublishのIdを引き継ぐ必要がある
+                                    // ここでPublishのIdを引き継ぐ必要はない
                                     for (sub_id, option) in subed_clients {
                                         let mut delivery_msg = pubpacket_clone_for_spawn.clone();
                                         // 受信側のサブスクリプションQoSに合わせて配信
@@ -157,8 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if delivery_msg.packet_id.is_none()
                                             && option.qos != mqtt::QoS::QoS0
                                         {
-                                            tracing::warn!("Delivering QoS {:?} PUBLISH but packet_id is None, client: {:?}", option.qos, sub_id);
-                                            continue;
+                                            let n: u16 = random!(..=1000);
+                                            delivery_msg.packet_id = Some(mqtt::PacketId::new(n));
                                         }
                                         let result = SESSION_MANAGER.send_by_mqtt_id(
                                             &sub_id,
