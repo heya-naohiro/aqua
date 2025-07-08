@@ -473,7 +473,7 @@ impl MqttPacket for Unsubscribe {
         &mut self,
         buf: &bytes::BytesMut,
         start_pos: usize,
-        _remaining_length: usize,
+        remaining_length: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
         let mut next_pos = start_pos;
@@ -506,7 +506,7 @@ impl MqttPacket for Unsubscribe {
                     }
                 }
             }
-
+            self.payload_length = remaining_length - (next_pos - start_pos);
 
             Ok(next_pos)
         }
@@ -3585,7 +3585,7 @@ fn mqtt5_subscribe_full_parse() {
                     .user_properties,
                 vec![
                     UserProperty(("source".to_string(), "test-script".to_string())),
-                    UserProperty(("topic-index".to_string(), "1".to_string()))
+                    UserProperty(("unsubscribe".to_string(), "batch".to_string()))
                 ]
             );
     
