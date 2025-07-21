@@ -1,0 +1,45 @@
+=== Connection::new() called with client_id 23acb7b2-490b-4a31-9c02-ed70d50fbf07
+(connect) Processing request
+2025-07-05T05:59:21.505362Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+=== Connection::new() called with client_id 637f14c8-cf30-437a-8daf-36f49011ddd2
+(connect) Processing request
+2025-07-05T05:59:21.809471Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+=== Connection::new() called with client_id 531de0c5-410d-43ed-9e08-0469e45195fe
+(connect) Processing request
+2025-07-05T05:59:22.124878Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+2025-07-05T05:59:22.125459Z DEBUG broker: -- Recieve: SUBSCRIBE(Subscribe { packet_id: PacketId(2), sub_properties: SubscribeProperties { subscription_identifier: None, user_properties: None }, topic_filters: [(TopicFilter("#"), SubscribeOption { retain_handling: ReceiveAll, retain_as_published: RetainAsPublished(false), no_local: NoLocal(false), qos: QoS0 })], payload_length: 4 })
+2025-07-05T05:59:22.125602Z DEBUG aqua::aqua::connection: -- Sending SUBACK(Suback { packet_id: PacketId(2), suback_properties: None, reason_codes: [GrantedQoS0], protocol_version: ProtocolVersion(4) })
+=== Connection::new() called with client_id 1e7d9243-5783-4c5c-8dfe-741039aad8f1
+(connect) Processing request
+2025-07-05T05:59:24.328199Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+=== Connection::new() called with client_id 5059616e-07cf-4003-9ada-23bcbecf6e8f
+(connect) Processing request
+2025-07-05T05:59:24.434988Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+2025-07-05T05:59:24.435586Z DEBUG broker: -- Recieve: SUBSCRIBE(Subscribe { packet_id: PacketId(2), sub_properties: SubscribeProperties { subscription_identifier: None, user_properties: None }, topic_filters: [(TopicFilter("TopicA"), SubscribeOption { retain_handling: ReceiveAll, retain_as_published: RetainAsPublished(false), no_local: NoLocal(false), qos: QoS2 })], payload_length: 9 })
+2025-07-05T05:59:24.435722Z DEBUG aqua::aqua::connection: -- Sending SUBACK(Suback { packet_id: PacketId(2), suback_properties: None, reason_codes: [GrantedQoS2], protocol_version: ProtocolVersion(4) })
+2025-07-05T05:59:24.435969Z DEBUG broker: -- Recieve: PUBLISH(Publish { dup: Dup(false), qos: QoS0, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: None, payload_length: 5, payload_data: b"qos 0", protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.436035Z ERROR broker: Received QoS QoS0 PUBLISH with None packet_id. Ignoring packet.
+2025-07-05T05:59:24.436114Z DEBUG broker: -- Recieve: PUBLISH(Publish { dup: Dup(false), qos: QoS1, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: Some(PacketId(3)), payload_length: 5, payload_data: b"qos 1", protocol_version: ProtocolVersion(0) })
+Delivering to "myclientid"
+2025-07-05T05:59:24.436265Z DEBUG aqua::aqua::connection: -- Sending PUBACK(Puback { packet_id: PacketId(3), reason_code: None, puback_properties: None, protocol_version: ProtocolVersion(0) })
+Delivering to "clean retained"
+2025-07-05T05:59:24.436346Z DEBUG aqua::aqua::connection: -- Sending PUBLISH(Publish { dup: Dup(false), qos: QoS0, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: None, payload_length: 5, payload_data: b"qos 1", protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.436404Z DEBUG aqua::aqua::connection: -- Sending PUBLISH(Publish { dup: Dup(false), qos: QoS2, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: Some(PacketId(3)), payload_length: 5, payload_data: b"qos 1", protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.436426Z DEBUG broker: -- Recieve: PUBLISH(Publish { dup: Dup(false), qos: QoS2, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: Some(PacketId(4)), payload_length: 5, payload_data: b"qos 2", protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.436549Z DEBUG aqua::aqua::connection: -- Sending PUBREC(Pubrec { packet_id: PacketId(4), reason_code: Some(Success), pubrec_properties: None, protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.437138Z DEBUG broker: -- Recieve: PUBREC(Pubrec { packet_id: PacketId(3), reason_code: None, pubrec_properties: None, protocol_version: ProtocolVersion(4) })
+2025-07-05T05:59:24.437218Z DEBUG aqua::aqua::connection: -- Sending PUBREL(Pubrel { packet_id: PacketId(3), pubrel_properties: None, reason_code: None, protocol_version: ProtocolVersion(4) })
+2025-07-05T05:59:24.437729Z DEBUG broker: -- Recieve: PUBREL(Pubrel { packet_id: PacketId(4), pubrel_properties: None, reason_code: None, protocol_version: ProtocolVersion(0) })
+QoS2 Delivering to "myclientid"
+QoS2 Delivering to "clean retained"
+2025-07-05T05:59:24.437931Z DEBUG aqua::aqua::connection: -- Sending PUBLISH(Publish { dup: Dup(false), qos: QoS0, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: None, payload_length: 5, payload_data: b"qos 2", protocol_version: ProtocolVersion(0) })
+2025-07-05T05:59:24.437954Z DEBUG aqua::aqua::connection: -- Sending PUBLISH(Publish { dup: Dup(false), qos: QoS2, retain: Retain(false), topic_name: TopicName("TopicA"), pub_properties: None, packet_id: Some(PacketId(4)), payload_length: 5, payload_data: b"qos 2", protocol_version: ProtocolVersion(0) })
+Write error: Os { code: 32, kind: BrokenPipe, message: "Broken pipe" }
+2025-07-05T05:59:24.438062Z DEBUG aqua::aqua::connection: -- Sending PUBCOMP(Pubcomp { packet_id: PacketId(4), pubcomp_reason: Some(Success), protocol_version: ProtocolVersion(0), pubcomp_properties: None })
+2025-07-05T05:59:24.438351Z DEBUG broker: -- Recieve: PUBCOMP(Pubcomp { packet_id: PacketId(3), pubcomp_reason: None, protocol_version: ProtocolVersion(4), pubcomp_properties: None })
+=== Connection::new() called with client_id 92808a9c-91d6-4293-a2b6-9cf7c588a09b
+(connect) Processing request
+2025-07-05T05:59:30.479807Z DEBUG aqua::aqua::connection: -- Sending CONNACK(Connack { session_present: false, connect_reason: Success, connack_properties: None, version: ProtocolVersion(4) })
+2025-07-05T05:59:30.480326Z DEBUG broker: -- Recieve: CONNECT(Connect { protocol_name: ProtocolName("MQTT"), protocol_ver: ProtocolVersion(4), connect_flags: ConnectFlags { user_name_flag: false, password_flag: false, will_retain: false, will_qos: QoS0, will_flag: false, clean_start: true }, keepalive: KeepAlive(0), properties: ConnectProperties { session_expiry_interval: None, receive_maximum: None, maximum_packet_size: None, topic_alias_maximum: None, request_response_information: None, request_problem_information: None, user_properties: None, authentication_method: None, authentication_data: None }, client_id: ClientId("myclientid"), username: None, password: None, will_properties: WillProperties { will_delay_interval: None, payload_format_indicator: None, message_expiry_interval: None, content_type: None, response_topic: None, correlation_data: None, user_properties: None, subscription_identifier: None }, will_topic: None, will_payload: None })
+=== Connection::new() called with client_id 5aaf7856-29d8-4912-8a43-cc8055034537
+(connect) Processing request

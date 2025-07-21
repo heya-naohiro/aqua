@@ -38,6 +38,7 @@ impl Decoder {
     }
 
     pub fn poll_decode(&mut self, cx: &mut Context<'_>) -> Poll<Result<ControlPacket, MqttError>> {
+        debug!("poll decode");
         if self.buf.is_empty() {
             debug!("buf is empty, so return Poll::Pending");
             return Poll::Pending;
@@ -45,7 +46,14 @@ impl Decoder {
         match &mut self.state {
             // next ( or first)
             DecoderState::Done => {
-                trace!("New Decode start {:?}", self.buf);
+                debug!("New Decode start {:?}", self.buf);
+
+                // 最低2byteは必要
+                if self.buf.len() < 2 {
+                    debug!("insufficient header {:?}", self.buf.len());
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
                 match mqtt::decoder::decode_fixed_header(&self.buf, 0, self.protocol_version) {
                     Ok(result) => {
                         let next_pos;
@@ -58,16 +66,18 @@ impl Decoder {
                         reset remaining legnth counter
                          */
                         self.remain_length_counter = 0;
+
+                        debug!("Pending.. A");
                         return Poll::Pending;
                     }
                     Err(err) => {
-                        trace!("fixed header decode error {:?}", &self.buf);
+                        debug!("fixed header decode error {:?}", &self.buf);
                         return Poll::Ready(Err(err));
                     }
                 }
             }
             DecoderState::FixedHeaderDecoded => {
-                trace!("DecoderState::FixedHeaderDecoded");
+                debug!("DecoderState::FixedHeaderDecoded");
 
                 // decode variable header
                 match self.tmp_packet.decode_variable_header(
@@ -86,6 +96,8 @@ impl Decoder {
 
                         cx.waker().wake_by_ref();
                         self.state = DecoderState::VariableHeaderDecoded;
+
+                        debug!("Pending.. B");
                         return Poll::Pending;
                     }
                     Err(err) => {
@@ -94,7 +106,7 @@ impl Decoder {
                 }
             }
             DecoderState::VariableHeaderDecoded => {
-                trace!("DecoderState::VariableHeaderDecoded");
+                debug!("DecoderState::VariableHeaderDecoded");
                 // decode payload
                 let buf = std::mem::take(&mut self.buf);
                 match self.tmp_packet.decode_payload(buf, self.protocol_version) {

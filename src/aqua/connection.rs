@@ -1,6 +1,7 @@
 pub mod connack_response;
 pub mod request;
 pub mod response;
+pub mod retain_store;
 pub mod session_manager;
 
 use bytes::BytesMut;
@@ -52,7 +53,7 @@ where
     connect_service: CS,
     #[pin]
     reader: ReadHalf<IO>,
-    tx: mpsc::Sender<Response>,
+    tx: mpsc::Sender<ControlPacket>,
     write_task: JoinHandle<()>,
     state: ConnectionState<S::Future, CS::Future>,
     write_buffer: BytesMut,
@@ -112,15 +113,14 @@ where
         }
     }
 
-    fn spawn_writer<W>(mut writer: W, mut rx: mpsc::Receiver<Response>) -> JoinHandle<()>
+    fn spawn_writer<W>(mut writer: W, mut rx: mpsc::Receiver<mqtt::ControlPacket>) -> JoinHandle<()>
     where
         W: AsyncWrite + Unpin + Send + 'static,
     {
         tokio::spawn(async move {
             let mut encoder = encoder::Encoder::new();
             let mut write_buffer = BytesMut::new();
-            while let Some(res) = rx.recv().await {
-                let packet = res.packet;
+            while let Some(packet) = rx.recv().await {
                 debug!("-- Sending {:?}", packet);
                 match encoder.encode_all(&packet, &mut write_buffer) {
                     Ok(()) => {}
@@ -190,6 +190,7 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => {
                         this.state = ConnectionState::PreConnection;
+                        debug!("Pending.. connection C");
                         return Poll::Pending;
                     }
                 };
@@ -205,6 +206,8 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     Poll::Pending => {
                         this.state = ConnectionState::ProcessingConnect(fut);
+
+                        debug!("Pending.. connection D");
                         return Poll::Pending;
                     }
                 };
@@ -215,7 +218,7 @@ where
             ConnectionState::ResponseConnect(res) => {
                 trace!("state: ConnectionState::ResponseConnect(res)");
                 let connack = res.to_connack();
-                let res = response::Response::new(mqtt::ControlPacket::CONNACK(connack));
+                let res = mqtt::ControlPacket::CONNACK(connack);
 
                 // Self
                 match this.tx.try_send(res) {
@@ -241,6 +244,8 @@ where
                     }
                     Poll::Pending => {
                         this.state = ConnectionState::ReadingPacket;
+
+                        debug!("Pending.. connection D");
                         return Poll::Pending;
                     }
                 };
@@ -258,6 +263,7 @@ where
                     }
                     Poll::Pending => {
                         this.state = ConnectionState::ProcessingService(fut);
+                        debug!("Pending.. processing");
                         return Poll::Pending;
                     }
                 };
@@ -266,24 +272,26 @@ where
             }
             ConnectionState::WritingPacket(res) => {
                 trace!("state: ConnectionState::WritingPacket(res) {:?}", &res);
-                match res.packet {
-                    ControlPacket::DISCONNECT(_) => {
-                        return Poll::Ready(Ok(()));
-                    }
-                    ControlPacket::NOOPERATION => {}
-                    _ => {
-                        match this.tx.try_send(response::Response::new(res.packet)) {
-                            Ok(()) => {
-                                trace!("success send");
-                            }
-                            Err(TrySendError::Full(resp)) => {
-                                eprintln!("Channel Full droping response: {:?}", resp);
-                            }
-                            Err(TrySendError::Closed(_)) => {
-                                return Poll::Ready(Err("Channel closed".into()));
-                            }
+                for packet in res.packets {
+                    match packet {
+                        ControlPacket::DISCONNECT(_) => {
+                            return Poll::Ready(Ok(()));
                         }
-                        trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+                        ControlPacket::NOOPERATION => {}
+                        _ => {
+                            match this.tx.try_send(packet) {
+                                Ok(()) => {
+                                    trace!("success send");
+                                }
+                                Err(TrySendError::Full(resp)) => {
+                                    eprintln!("Channel Full droping response: {:?}", resp);
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    return Poll::Ready(Err("Channel closed".into()));
+                                }
+                            }
+                            trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+                        }
                     }
                 }
 
@@ -317,20 +325,25 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
         let this = self.project();
-        debug!("read packet");
+        debug!("read packet {:?}", &this.decoder.buf);
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
             }
-            Poll::Ready(Ok(_n)) => {
+            Poll::Ready(Ok(n)) => {
                 // fallthrough
+                debug!(
+                    "after poll_read_buf: buf.len() = {}",
+                    this.decoder.buf.len()
+                );
+                debug!("buf = {:02x?}", &this.decoder.buf);
             }
             Poll::Ready(Err(e)) => {
                 return Poll::Ready(Err(Box::new(e)));
             }
             Poll::Pending => {
                 // fallthrough
-                debug!("pending fallthrough");
+                debug!("Pending, fallthrough");
             }
         }
         match this.decoder.poll_decode(cx) {

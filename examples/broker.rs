@@ -1,6 +1,8 @@
 use aqua::session_manager;
 use aqua::ConnackError;
 use aqua::ConnackResponse;
+use aqua::RetainStore;
+use aqua::RETAIN_STORE;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
 use axum::routing::connect;
@@ -72,22 +74,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mqtt_id: String = guard.clone();
 
                                 if mqtt_id != "".to_string() {
-                                    for (filter, suboption) in subpacket.topic_filters {
+                                    for (filter, suboption) in &subpacket.topic_filters {
                                         trace!("Subscribe Done!! ");
-                                        topic_mgr.register(filter.value(), &mqtt_id, &suboption);
+                                        topic_mgr.register(
+                                            filter.value().to_string(),
+                                            &mqtt_id,
+                                            &suboption,
+                                        );
                                         success_codes.push(SubackReasonCode::from(suboption.qos));
                                     }
                                 }
                                 let protocol_version =
                                     SESSION_MANAGER.get_protocol_version(&mqtt_id);
-                                return Ok(response::Response::new(ControlPacket::SUBACK({
+
+                                /* Collect retain publish packets  */
+                                // [TODO] check retain handling flag, in mqtt5
+                                let mut retain_pubpackets = vec![];
+                                let mut for_dedup_topic = vec![];
+                                for (filter, _) in &subpacket.topic_filters {
+                                    let publishes =
+                                        RETAIN_STORE.check_retain(filter.value().to_string());
+
+                                    for p in publishes {
+                                        if for_dedup_topic.contains(&p.topic_name) {
+                                            continue;
+                                        }
+                                        for_dedup_topic.push(p.topic_name.clone());
+                                        if p.qos == mqtt::QoS::QoS2 {
+                                            SESSION_MANAGER
+                                                .add_staging_packet(p.clone(), mqtt::QoS::QoS2);
+                                        }
+                                        retain_pubpackets.push(ControlPacket::PUBLISH(p));
+                                    }
+                                }
+                                let mut respackets = vec![ControlPacket::SUBACK({
                                     Suback {
                                         packet_id: subpacket.packet_id,
                                         suback_properties: None,
                                         reason_codes: success_codes,
                                         protocol_version: protocol_version.unwrap(),
                                     }
-                                })));
+                                })];
+                                respackets.extend(retain_pubpackets);
+                                return Ok(response::Response::new_packets(respackets));
                             }
                             ControlPacket::PUBLISH(mut pubpacket) => {
                                 trace!("publish");
@@ -116,8 +145,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 };
                                 if qos == mqtt::QoS::QoS2 {
-                                    SESSION_MANAGER
-                                        .add_staging_packet(pubpacket.clone(), mqtt::QoS::QoS2);
+                                    if pubpacket.payload_length == 0 {
+                                        if pubpacket.retain.value() {
+                                            RETAIN_STORE.remove_retain(
+                                                &pubpacket.topic_name.clone().value(),
+                                            );
+                                        }
+                                    } else {
+                                        SESSION_MANAGER
+                                            .add_staging_packet(pubpacket.clone(), mqtt::QoS::QoS2);
+                                    }
+
                                     let mqtt_id_guard = mqtt_id_lock.read().await;
                                     let mqtt_id = mqtt_id_guard.clone();
                                     drop(mqtt_id_guard);
@@ -135,42 +173,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
 
                                 let topic_mgr = Arc::clone(&topic_mgr);
-                                let pubpacket_clone_for_spawn = pubpacket.clone();
-                                tokio::spawn(async move {
-                                    let subed_clients = topic_mgr.subed_id(
-                                        pubpacket_clone_for_spawn
-                                            .topic_name
-                                            .clone()
-                                            .value()
-                                            .to_string(),
-                                    );
-                                    // ここでPublishのIdを引き継ぐ必要はない
-                                    for (sub_id, option) in subed_clients {
-                                        let mut delivery_msg = pubpacket_clone_for_spawn.clone();
-                                        // 受信側のサブスクリプションQoSに合わせて配信
-                                        delivery_msg.qos = option.qos;
-                                        delivery_msg.packet_id = if option.qos == mqtt::QoS::QoS0 {
-                                            None
-                                        } else {
-                                            pubpacket_clone_for_spawn.packet_id.clone()
-                                        };
-                                        if delivery_msg.packet_id.is_none()
-                                            && option.qos != mqtt::QoS::QoS0
-                                        {
-                                            let n: u16 = random!(..=1000);
-                                            delivery_msg.packet_id = Some(mqtt::PacketId::new(n));
-                                        }
-                                        let result = SESSION_MANAGER.send_by_mqtt_id(
-                                            &sub_id,
-                                            ControlPacket::PUBLISH(delivery_msg),
-                                        );
-                                        if let Ok(()) = result {
-                                            println!("Delivering to {:?}", sub_id);
-                                        } else {
-                                            println!("Error {:?}", sub_id);
-                                        }
+                                if pubpacket.payload_length == 0 {
+                                    if pubpacket.retain.value() {
+                                        RETAIN_STORE
+                                            .remove_retain(&pubpacket.topic_name.clone().value());
                                     }
-                                });
+                                } else {
+                                    let pubpacket_clone_for_spawn = pubpacket.clone();
+                                    tokio::spawn(async move {
+                                        /* check vacant */
+
+                                        /* retain */
+                                        if pubpacket_clone_for_spawn.retain.value() {
+                                            RETAIN_STORE.update_retain(
+                                                pubpacket_clone_for_spawn
+                                                    .topic_name
+                                                    .clone()
+                                                    .value(),
+                                                pubpacket_clone_for_spawn.clone(),
+                                            );
+                                        }
+
+                                        /* publish */
+                                        let subed_clients = topic_mgr.subed_id(
+                                            pubpacket_clone_for_spawn
+                                                .topic_name
+                                                .clone()
+                                                .value()
+                                                .to_string(),
+                                        );
+                                        // ここでPublishのIdを引き継ぐ必要はない
+                                        for (sub_id, option) in subed_clients {
+                                            let mut delivery_msg =
+                                                pubpacket_clone_for_spawn.clone();
+                                            // 受信側のサブスクリプションQoSに合わせて配信
+                                            delivery_msg.qos = option.qos;
+                                            delivery_msg.packet_id =
+                                                if option.qos == mqtt::QoS::QoS0 {
+                                                    None
+                                                } else {
+                                                    pubpacket_clone_for_spawn.packet_id.clone()
+                                                };
+                                            if delivery_msg.packet_id.is_none()
+                                                && option.qos != mqtt::QoS::QoS0
+                                            {
+                                                let n: u16 = random!(..=1000);
+                                                delivery_msg.packet_id =
+                                                    Some(mqtt::PacketId::new(n));
+                                            }
+                                            let result = SESSION_MANAGER.send_by_mqtt_id(
+                                                &sub_id,
+                                                ControlPacket::PUBLISH(delivery_msg),
+                                            );
+                                            if let Ok(()) = result {
+                                                println!("Delivering to {:?}", sub_id);
+                                            } else {
+                                                println!("Error {:?}", sub_id);
+                                            }
+                                        }
+                                    });
+                                }
+
                                 // [TODO] need pub id check except QoS0
                                 match qos {
                                     mqtt::QoS::QoS0 => {
@@ -218,34 +281,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let topic_mgr = Arc::clone(&topic_mgr);
                                     let delivery_publish = staged_publish.clone();
 
-                                    tokio::spawn(async move {
-                                        let subed_clients = topic_mgr.subed_id(
-                                            delivery_publish.topic_name.clone().value().to_string(),
-                                        );
-                                        for (sub_id, option) in subed_clients {
-                                            let mut delivery_msg = delivery_publish.clone();
-
-                                            // 受信側のサブスクリプションQoSに合わせて配信
-                                            delivery_msg.qos = option.qos;
-                                            delivery_msg.packet_id = if option.qos
-                                                == mqtt::QoS::QoS0
-                                            {
-                                                None
-                                            } else {
-                                                Some(packet_id_outer.clone()) // クロージャ内はclone済みのものを使う
-                                            };
-                                            let result = SESSION_MANAGER.send_by_mqtt_id(
-                                                &sub_id,
-                                                ControlPacket::PUBLISH(delivery_msg),
+                                    if delivery_publish.payload_length == 0
+                                        && delivery_publish.retain.value()
+                                    {
+                                        RETAIN_STORE
+                                            .remove_retain(&delivery_publish.topic_name.value());
+                                    } else {
+                                        /* save to retain */
+                                        if delivery_publish.retain.value() {
+                                            RETAIN_STORE.update_retain(
+                                                delivery_publish.topic_name.clone().value(),
+                                                delivery_publish.clone(),
                                             );
-                                            if let Ok(()) = result {
-                                                println!("QoS2 Delivering to {:?}", sub_id);
-                                            } else {
-                                                println!("QoS2 Error {:?}", sub_id);
-                                            }
                                         }
-                                    });
-                                    // パケットをコミット（削除）
+                                        tokio::spawn(async move {
+                                            let subed_clients = topic_mgr.subed_id(
+                                                delivery_publish
+                                                    .topic_name
+                                                    .clone()
+                                                    .value()
+                                                    .to_string(),
+                                            );
+                                            for (sub_id, option) in subed_clients {
+                                                let mut delivery_msg = delivery_publish.clone();
+
+                                                // 受信側のサブスクリプションQoSに合わせて配信
+                                                delivery_msg.qos = option.qos;
+                                                delivery_msg.packet_id =
+                                                    if option.qos == mqtt::QoS::QoS0 {
+                                                        None
+                                                    } else {
+                                                        Some(packet_id_outer.clone())
+                                                        // クロージャ内はclone済みのものを使う
+                                                    };
+                                                let result = SESSION_MANAGER.send_by_mqtt_id(
+                                                    &sub_id,
+                                                    ControlPacket::PUBLISH(delivery_msg),
+                                                );
+                                                if let Ok(()) = result {
+                                                    println!("QoS2 Delivering to {:?}", sub_id);
+                                                } else {
+                                                    println!("QoS2 Error {:?}", sub_id);
+                                                }
+                                            }
+                                        });
+                                        // パケットをコミット（削除）
+                                    }
+
                                     let _ = SESSION_MANAGER.commit_packet(packet_id_outer.clone());
                                 }
 
@@ -274,10 +356,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     },
                                 )));
                             }
-                            ControlPacket::PUBCOMP(_pubcomp_packet) => {
+                            ControlPacket::PUBCOMP(pubcomp_packet) => {
                                 trace!(
                                     "Received PUBCOMP from subscriber - QoS2 handshake complete"
                                 );
+                                let packet_id = pubcomp_packet.packet_id.clone();
+                                let _ = SESSION_MANAGER.commit_packet(packet_id);
+
                                 return Ok(response::Response::new(ControlPacket::NOOPERATION));
                             }
                             other => {
