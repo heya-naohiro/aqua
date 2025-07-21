@@ -343,7 +343,6 @@ where
             }
             Poll::Pending => {
                 // fallthrough
-                debug!("Pending, fallthrough");
             }
         }
         match this.decoder.poll_decode(cx) {

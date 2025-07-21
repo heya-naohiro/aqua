@@ -328,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         // パケットをコミット（削除）
                                     }
 
+
                                     let _ = SESSION_MANAGER.commit_packet(packet_id_outer.clone());
                                 }
 
@@ -362,7 +363,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                                 let packet_id = pubcomp_packet.packet_id.clone();
                                 let _ = SESSION_MANAGER.commit_packet(packet_id);
-
                                 return Ok(response::Response::new(ControlPacket::NOOPERATION));
                             }
                             other => {

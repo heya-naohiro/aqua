@@ -66,8 +66,6 @@ impl Decoder {
                         reset remaining legnth counter
                          */
                         self.remain_length_counter = 0;
-
-                        debug!("Pending.. A");
                         return Poll::Pending;
                     }
                     Err(err) => {
