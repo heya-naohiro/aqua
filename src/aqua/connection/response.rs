@@ -3,12 +3,17 @@ use uuid::Uuid;
 
 #[derive(Default, Debug)]
 pub struct Response {
-    pub packet: ControlPacket,
+    pub packets: Vec<ControlPacket>,
 }
 
 impl Response {
     pub fn new(packet: ControlPacket) -> Self {
-        return Self { packet };
+        return Self {
+            packets: vec![packet],
+        };
+    }
+    pub fn new_packets(packets: Vec<ControlPacket>) -> Self {
+        return Self { packets };
     }
 }
 

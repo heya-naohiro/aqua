@@ -1186,8 +1186,8 @@ impl TopicFilter {
         let (topic_name, next_pos) = decode_utf8_string(buf, start_pos)?;
         return Ok((TopicFilter(topic_name), next_pos));
     }
-    pub fn value(self) -> String {
-        self.0
+    pub fn value(&self) -> &str {
+        &self.0
     }
 }
 
@@ -1250,16 +1250,21 @@ pub struct Publish {
     pub topic_name: TopicName,
     pub pub_properties: Option<PublishProperties>,
     pub packet_id: Option<PacketId>, /* 2byte integer */
-    payload_length: usize,
+    pub payload_length: usize,
     pub payload_data: bytes::Bytes,
     pub protocol_version: ProtocolVersion,
 }
 
 #[derive(Debug, PartialEq, Clone, Default)]
-struct Retain(bool); // fixed header
+pub struct Retain(bool); // fixed header
+impl Retain {
+    pub fn value(&self) -> bool {
+        return self.0;
+    }
+}
 
 #[derive(Debug, PartialEq, Clone, Default)]
-struct Dup(bool); // fixed header
+pub struct Dup(bool); // fixed header
 
 #[derive(PartialEq, Debug, Default)]
 pub struct Suback {

@@ -6,22 +6,22 @@ use mqtt_coder::mqtt::{
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tracing::trace;
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct Outbound {
-    tx: mpsc::Sender<Response>,
+    tx: mpsc::Sender<ControlPacket>,
 }
 
 impl Outbound {
-    pub fn new(tx: mpsc::Sender<Response>) -> Self {
+    pub fn new(tx: mpsc::Sender<ControlPacket>) -> Self {
         Self { tx }
     }
 
     /// ControlPacket を送信
-    pub fn send(&self, pkt: ControlPacket) -> Result<(), TrySendError<Response>> {
-        self.tx.try_send(Response::new(pkt))
+    pub fn send(&self, pkt: ControlPacket) -> Result<(), TrySendError<ControlPacket>> {
+        self.tx.try_send(pkt)
     }
 }
 
@@ -48,6 +48,7 @@ impl SessionManager {
 
     // for re-send, for QoS2
     pub fn add_staging_packet(&self, pkt: Publish, qos: QoS) {
+        debug!("add staging !!!!!!!!");
         if let Some(ref id) = pkt.packet_id {
             self.qos_tmp.insert(id.value().clone(), (pkt, qos));
         }
@@ -80,12 +81,12 @@ impl SessionManager {
         &self,
         client_id: &Uuid,
         pkt: ControlPacket,
-    ) -> Result<(), TrySendError<Response>> {
+    ) -> Result<(), TrySendError<ControlPacket>> {
         trace!("sent_by_client_id {:?}", client_id);
         if let Some(outbound) = self.by_client_id.get(client_id) {
             outbound.send(pkt)
         } else {
-            Err(TrySendError::Closed(Response::new(pkt)))
+            Err(TrySendError::Closed(pkt))
         }
     }
 
@@ -93,7 +94,7 @@ impl SessionManager {
         &self,
         mqtt_id: &String,
         pkt: ControlPacket,
-    ) -> Result<(), TrySendError<Response>> {
+    ) -> Result<(), TrySendError<ControlPacket>> {
         trace!("sent_by_mqtt_id {:?}", mqtt_id);
         trace!("client_id map  {:?}", self.by_client_id);
         trace!("mqtt_id map  {:?}", self.by_client_mqtt);
