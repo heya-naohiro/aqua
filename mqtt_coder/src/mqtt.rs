@@ -21,7 +21,7 @@ pub enum MqttError {
     ProtocolViolation
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub enum ControlPacket {
     CONNECT(Connect),
     DISCONNECT(Disconnect),
@@ -153,7 +153,7 @@ impl MqttPacket for ControlPacket {
 }
 
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Pingreq {
 }
 
@@ -180,7 +180,7 @@ impl Pingreq {
 }
 
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Pingresp {
     
 }
@@ -194,7 +194,7 @@ impl Pingresp {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Connack {
     pub session_present: bool,
     pub connect_reason: ConnackReason,
@@ -269,7 +269,7 @@ impl ConnackReason {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct ConnackProperties {
     pub session_expiry_interval: Option<u32>,
     pub receive_maximum: Option<u16>,
@@ -442,7 +442,7 @@ impl Connack {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Unsubscribe {
     pub topic_filters: Vec<TopicFilter>,
     pub unsubscribe_properties: Option<UnsubscribeProperties>,
@@ -451,7 +451,7 @@ pub struct Unsubscribe {
     pub packet_id: PacketId,
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct UnsubscribeProperties {
     user_properties: Vec<UserProperty>,
 }
@@ -543,7 +543,7 @@ impl MqttPacket for Unsubscribe {
 }
 
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Puback {
     pub packet_id: PacketId,
     pub reason_code: Option<PubackReasonCode>,
@@ -935,7 +935,7 @@ impl MqttPacket for Pubrel {
 }
 
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Pubcomp {
     pub packet_id: PacketId,
     pub pubcomp_reason: Option<PubcompReasonCode>,
@@ -1161,7 +1161,7 @@ impl Unsuback {
 }
 
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Subscribe {
     pub packet_id: PacketId,
     pub sub_properties: SubscribeProperties,
@@ -1170,13 +1170,13 @@ pub struct Subscribe {
     payload_length: usize,
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct SubscribeProperties {
     subscription_identifier: Option<SubscriptionIdentifier>,
     user_properties: Option<Vec<UserProperty>>,
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct TopicFilter(String);
 impl TopicFilter {
     fn try_from(
@@ -1266,7 +1266,7 @@ impl Retain {
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct Dup(bool); // fixed header
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Suback {
     pub packet_id: PacketId,
     pub suback_properties: Option<SubackProperties>, /* MQTT5 only */
@@ -2835,7 +2835,7 @@ impl MqttPacket for Connect {
         todo!()
     }
 }
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Disconnect {
     pub reason_code: DisconnectReasonCode,
     pub disconnect_properties: Option<DisconnectProperties>

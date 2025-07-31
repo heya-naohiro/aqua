@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use mqtt_coder::mqtt::{
     self, ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS,
 };
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -33,6 +34,8 @@ pub struct SessionManager {
     by_client_mqtt: Arc<DashMap<Uuid, String>>,
     qos_tmp: Arc<DashMap<u16, (Publish, QoS)>>,
     mqtt_version: Arc<DashMap<String, mqtt::ProtocolVersion>>,
+    // [TODO] now unlimited..., need limiter
+    queue_by_mqtt_id: Arc<DashMap<String, VecDeque<mqtt::ControlPacket>>>,
 }
 
 impl SessionManager {
@@ -43,7 +46,16 @@ impl SessionManager {
             by_client_mqtt: Arc::new(DashMap::new()),
             qos_tmp: Arc::new(DashMap::new()),
             mqtt_version: Arc::new(DashMap::new()),
+            queue_by_mqtt_id: Arc::new(DashMap::new()),
         }
+    }
+    pub fn add_queue_session(&self, mqtt_id: String) -> Result<(), MqttError> {
+        if let Some(_) = self.queue_by_mqtt_id.get(&mqtt_id) {
+        } else {
+            let new_queue = VecDeque::new();
+            self.queue_by_mqtt_id.insert(mqtt_id, new_queue);
+        }
+        return Ok(());
     }
 
     // for re-send, for QoS2
@@ -77,6 +89,8 @@ impl SessionManager {
         trace!("unregister_client_id {:?}", client_id);
         self.by_client_id.remove(&client_id);
     }
+
+    // queued if clean session is false
     pub fn send_by_client_id(
         &self,
         client_id: &Uuid,
@@ -87,6 +101,13 @@ impl SessionManager {
             outbound.send(pkt)
         } else {
             Err(TrySendError::Closed(pkt))
+        }
+    }
+    pub fn flush_queue(&self, mqtt_id: &String) {
+        if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+            while let Some(pkt) = queue.pop_front() {
+                let _ = self.send_by_mqtt_id(mqtt_id, pkt);
+            }
         }
     }
 
@@ -101,7 +122,16 @@ impl SessionManager {
         if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
             let client_id = *value_ref;
             trace!("send, client_id {:?}", client_id);
-            self.send_by_client_id(&client_id, pkt)
+            match self.send_by_client_id(&client_id, pkt.clone()) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    // Closedの場合もここに入る
+                    if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+                        queue.push_back(pkt);
+                    }
+                    Ok(())
+                }
+            }
         } else {
             trace!("cannot send anything");
             Ok(())
