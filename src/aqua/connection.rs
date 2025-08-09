@@ -11,7 +11,6 @@ use mqtt_coder::mqtt;
 use mqtt_coder::mqtt::ControlPacket;
 use mqtt_coder::mqtt::MqttError;
 use pin_project::pin_project;
-use request::Request;
 use response::Response;
 use std::future::Future;
 use std::pin::Pin;
@@ -19,8 +18,8 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{split, AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::io::poll_read_buf;
 use tower::Service;
@@ -38,10 +37,10 @@ pub static SESSION_MANAGER: Lazy<SessionManager> = Lazy::new(|| SessionManager::
 #[pin_project]
 pub struct Connection<S, CS, IO>
 where
-    S: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    S: Service<WriteRequest, Response = Response> + Unpin,
     S::Future: Unpin, // `S::Future` を `Unpin` にする
     CS: Service<
-            Request<ControlPacket>,
+            WriteRequest,
             Response = connack_response::ConnackResponse,
             Error = connack_response::ConnackError,
         > + Unpin,
@@ -49,11 +48,12 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     client_id: Uuid,
+    mqtt_id: Option<String>,
     service: S,
     connect_service: CS,
     #[pin]
     reader: ReadHalf<IO>,
-    tx: mpsc::Sender<ControlPacket>,
+    tx: mpsc::Sender<WriteRequest>,
     write_task: JoinHandle<()>,
     state: ConnectionState<S::Future, CS::Future>,
     write_buffer: BytesMut,
@@ -73,13 +73,19 @@ enum ConnectionState<F, CF> {
     WritingPacket(Response),                            // index 5
 }
 
+#[derive(Clone, Debug)]
+struct WriteRequest {
+    packet: ControlPacket,
+    mqtt_id: String,
+}
+
 impl<S, CS, IO> Connection<S, CS, IO>
 where
-    S: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    S: Service<WriteRequest, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin + 'static,
     CS: Service<
-            Request<ControlPacket>,
+            WriteRequest,
             Response = connack_response::ConnackResponse,
             Error = connack_response::ConnackError,
         > + Unpin,
@@ -94,7 +100,7 @@ where
 
         let outbound = session_manager::Outbound::new(tx.clone());
         SESSION_MANAGER.register_client_id(client_id, outbound);
-        eprintln!(
+        debug!(
             "=== Connection::new() called with client_id {:?}",
             client_id
         );
@@ -110,22 +116,22 @@ where
             decoder: decoder::Decoder::new(),
             encoder: encoder::Encoder::new(),
             protocol_version: None,
+            mqtt_id: None,
         }
     }
 
-    fn spawn_writer<W>(mut writer: W, mut rx: mpsc::Receiver<mqtt::ControlPacket>) -> JoinHandle<()>
+    fn spawn_writer<W>(mut writer: W, mut rx: mpsc::Receiver<WriteRequest>) -> JoinHandle<()>
     where
         W: AsyncWrite + Unpin + Send + 'static,
     {
         tokio::spawn(async move {
             let mut encoder = encoder::Encoder::new();
             let mut write_buffer = BytesMut::new();
-            while let Some(packet) = rx.recv().await {
-                debug!("-- Sending {:?}", packet);
-                match encoder.encode_all(&packet, &mut write_buffer) {
+            while let Some(write_req) = rx.recv().await {
+                match encoder.encode_all(&write_req.packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
-                        error!("Encode error: {:?} {:?}", &packet, e);
+                        error!("Encode error: {:?} {:?}", &write_req.packet, e);
                         return;
                     }
                 }
@@ -133,12 +139,12 @@ where
                 while !write_buffer.is_empty() {
                     match writer.write_buf(&mut write_buffer).await {
                         Ok(0) => {
-                            eprintln!("Connection closed during write");
+                            error!("Connection closed during write");
                             return;
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            eprintln!("Write error: {:?}", e);
+                            error!("Write error: {:?}", e);
                             return;
                         }
                     }
@@ -153,11 +159,11 @@ where
 
 impl<S, CS, IO> Future for Connection<S, CS, IO>
 where
-    S: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    S: Service<WriteRequest, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
     CS: Service<
-            Request<ControlPacket>,
+            WriteRequest,
             Response = connack_response::ConnackResponse,
             Error = connack_response::ConnackError,
         > + Unpin,
@@ -177,8 +183,10 @@ where
                 trace!("state: ConnectionState::PreConnection");
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => {
-                        if let ControlPacket::CONNECT(ref packet) = req.body {
+                        if let ControlPacket::CONNECT(ref packet) = req.packet {
                             // here ??
+                            // approve mqtt_id implicity
+                            this.mqtt_id = Some(packet.client_id.clone().into_inner());
                             this.protocol_version = Some(packet.protocol_ver);
                             this.decoder.set_protocol_version(Some(packet.protocol_ver));
                             req
@@ -190,7 +198,7 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => {
                         this.state = ConnectionState::PreConnection;
-                        debug!("Pending.. connection C");
+
                         return Poll::Pending;
                     }
                 };
@@ -207,7 +215,6 @@ where
                     Poll::Pending => {
                         this.state = ConnectionState::ProcessingConnect(fut);
 
-                        debug!("Pending.. connection D");
                         return Poll::Pending;
                     }
                 };
@@ -218,10 +225,14 @@ where
             ConnectionState::ResponseConnect(res) => {
                 trace!("state: ConnectionState::ResponseConnect(res)");
                 let connack = res.to_connack();
-                let res = mqtt::ControlPacket::CONNACK(connack);
+                let respkt = mqtt::ControlPacket::CONNACK(connack);
 
                 // Self
-                match this.tx.try_send(res) {
+                let mqtt_id = this.mqtt_id.clone().unwrap();
+                match this.tx.try_send(WriteRequest {
+                    packet: respkt,
+                    mqtt_id: mqtt_id,
+                }) {
                     Ok(()) => {}
                     Err(TrySendError::Full(resp)) => {
                         eprintln!("Channel Full droping response: {:?}", resp);
@@ -245,7 +256,6 @@ where
                     Poll::Pending => {
                         this.state = ConnectionState::ReadingPacket;
 
-                        debug!("Pending.. connection D");
                         return Poll::Pending;
                     }
                 };
@@ -263,7 +273,7 @@ where
                     }
                     Poll::Pending => {
                         this.state = ConnectionState::ProcessingService(fut);
-                        debug!("Pending.. processing");
+
                         return Poll::Pending;
                     }
                 };
@@ -279,7 +289,11 @@ where
                         }
                         ControlPacket::NOOPERATION => {}
                         _ => {
-                            match this.tx.try_send(packet) {
+                            let mqtt_id = this.mqtt_id.clone().unwrap();
+                            match this.tx.try_send(WriteRequest {
+                                packet: packet,
+                                mqtt_id: mqtt_id,
+                            }) {
                                 Ok(()) => {
                                     trace!("success send");
                                 }
@@ -309,11 +323,11 @@ where
 
 impl<S, CS, IO> Connection<S, CS, IO>
 where
-    S: Service<Request<ControlPacket>, Response = Response> + Unpin,
+    S: Service<WriteRequest, Response = Response> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
     S::Future: Unpin,
     CS: Service<
-            Request<ControlPacket>,
+            WriteRequest,
             Response = connack_response::ConnackResponse,
             Error = connack_response::ConnackError,
         > + Unpin,
@@ -323,38 +337,32 @@ where
     fn read_packet(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<Request<mqtt::ControlPacket>, Box<dyn std::error::Error>>> {
+    ) -> Poll<Result<WriteRequest, Box<dyn std::error::Error>>> {
         let this = self.project();
-        debug!("read packet {:?}", &this.decoder.buf);
+
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
             }
-            Poll::Ready(Ok(n)) => {
-                // fallthrough
-                debug!(
-                    "after poll_read_buf: buf.len() = {}",
-                    this.decoder.buf.len()
-                );
-                debug!("buf = {:02x?}", &this.decoder.buf);
-            }
+            Poll::Ready(Ok(n)) => {}
             Poll::Ready(Err(e)) => {
                 return Poll::Ready(Err(Box::new(e)));
             }
             Poll::Pending => {
                 // fallthrough
-                debug!("Pending, fallthrough");
             }
         }
         match this.decoder.poll_decode(cx) {
             Poll::Ready(Ok(p)) => {
                 trace!("decode packet {:?}", p);
                 trace!("rest {:?}", &this.decoder.buf);
-                Poll::Ready(Ok(Request::new(p)))
+                Poll::Ready(Ok(WriteRequest {
+                    packet: p,
+                    mqtt_id: "".to_string(),
+                }))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
             Poll::Pending => {
-                debug!("poll decode : Pending");
                 return Poll::Pending;
             }
         }

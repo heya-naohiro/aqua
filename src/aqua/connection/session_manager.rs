@@ -1,5 +1,6 @@
-use crate::aqua::connection::response::Response;
+use crate::aqua::connection::{response::Response, WriteRequest};
 use dashmap::DashMap;
+use futures_util::io::Write;
 use mqtt_coder::mqtt::{
     self, ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS,
 };
@@ -12,17 +13,17 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct Outbound {
-    tx: mpsc::Sender<ControlPacket>,
+    tx: mpsc::Sender<WriteRequest>,
 }
 
 impl Outbound {
-    pub fn new(tx: mpsc::Sender<ControlPacket>) -> Self {
+    pub fn new(tx: mpsc::Sender<WriteRequest>) -> Self {
         Self { tx }
     }
 
     /// ControlPacket を送信
-    pub fn send(&self, pkt: ControlPacket) -> Result<(), TrySendError<ControlPacket>> {
-        self.tx.try_send(pkt)
+    pub fn send(&self, req: WriteRequest) -> Result<(), TrySendError<WriteRequest>> {
+        self.tx.try_send(req)
     }
 }
 
@@ -49,18 +50,24 @@ impl SessionManager {
             queue_by_mqtt_id: Arc::new(DashMap::new()),
         }
     }
-    pub fn add_queue_session(&self, mqtt_id: String) -> Result<(), MqttError> {
-        if let Some(_) = self.queue_by_mqtt_id.get(&mqtt_id) {
+
+    pub fn discard_queue(&self, mqtt_id: String) -> Result<(), MqttError> {
+        debug!("discard queue {:?}", &mqtt_id);
+        self.queue_by_mqtt_id.remove(&mqtt_id);
+        Ok(())
+    }
+    pub fn add_to_queue(&self, mqtt_id: String, packet: mqtt::ControlPacket) {
+        if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(&mqtt_id) {
+            queue.push_back(packet);
         } else {
-            let new_queue = VecDeque::new();
+            let mut new_queue = VecDeque::new();
+            new_queue.push_back(packet); // ここで追加
             self.queue_by_mqtt_id.insert(mqtt_id, new_queue);
         }
-        return Ok(());
     }
 
     // for re-send, for QoS2
     pub fn add_staging_packet(&self, pkt: Publish, qos: QoS) {
-        debug!("add staging !!!!!!!!");
         if let Some(ref id) = pkt.packet_id {
             self.qos_tmp.insert(id.value().clone(), (pkt, qos));
         }
@@ -94,18 +101,22 @@ impl SessionManager {
     pub fn send_by_client_id(
         &self,
         client_id: &Uuid,
-        pkt: ControlPacket,
-    ) -> Result<(), TrySendError<ControlPacket>> {
-        trace!("sent_by_client_id {:?}", client_id);
+        req: WriteRequest,
+    ) -> Result<(), TrySendError<WriteRequest>> {
+        debug!("sent_by_client_id {:?}", client_id);
         if let Some(outbound) = self.by_client_id.get(client_id) {
-            outbound.send(pkt)
+            outbound.send(req)
         } else {
-            Err(TrySendError::Closed(pkt))
+            Err(TrySendError::Closed(req))
         }
     }
+
     pub fn flush_queue(&self, mqtt_id: &String) {
+        debug!("flush queue {:?}", &mqtt_id);
         if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+            debug!("-- queue exist {:?}", &mqtt_id);
             while let Some(pkt) = queue.pop_front() {
+                debug!("-- -- sending... {:?} {:?}", &mqtt_id, &pkt);
                 let _ = self.send_by_mqtt_id(mqtt_id, pkt);
             }
         }
@@ -121,14 +132,21 @@ impl SessionManager {
         trace!("mqtt_id map  {:?}", self.by_client_mqtt);
         if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
             let client_id = *value_ref;
-            trace!("send, client_id {:?}", client_id);
-            match self.send_by_client_id(&client_id, pkt.clone()) {
-                Ok(_) => Ok(()),
+
+            match self.send_by_client_id(
+                &client_id,
+                WriteRequest {
+                    packet: pkt,
+                    mqtt_id: mqtt_id.to_string(),
+                },
+            ) {
+                Ok(_) => {
+                    debug!("send suceed!! {:?}", mqtt_id);
+                    Ok(())
+                }
                 Err(_) => {
+                    debug!("send failed!!! {:?}", mqtt_id);
                     // Closedの場合もここに入る
-                    if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
-                        queue.push_back(pkt);
-                    }
                     Ok(())
                 }
             }

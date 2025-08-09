@@ -43,7 +43,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let topic_mgr = Arc::clone(&topic_mgr);
 
                     Box::pin(async move {
-                        debug!("-- Recieve: {:?}", req.body);
                         match req.body {
                             ControlPacket::DISCONNECT(_disconnect) => {
                                 trace!("Disconnect");
@@ -226,9 +225,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ControlPacket::PUBLISH(delivery_msg),
                                             );
                                             if let Ok(()) = result {
-                                                println!("Delivering to {:?}", sub_id);
+                                                debug!("Delivering to {:?}", sub_id);
                                             } else {
-                                                println!("Error {:?}", sub_id);
+                                                debug!("Error {:?}", sub_id);
                                             }
                                         }
                                     });
@@ -319,9 +318,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     ControlPacket::PUBLISH(delivery_msg),
                                                 );
                                                 if let Ok(()) = result {
-                                                    println!("QoS2 Delivering to {:?}", sub_id);
+                                                    debug!("QoS2 Delivering to {:?}", sub_id);
                                                 } else {
-                                                    println!("QoS2 Error {:?}", sub_id);
+                                                    debug!("QoS2 Error {:?}", sub_id);
                                                 }
                                             }
                                         });
@@ -384,6 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("(connect) Processing request");
                 match req.body {
                     ControlPacket::CONNECT(connect_data) => {
+                        let mqtt_id = connect_data.client_id.clone().into_inner();
                         match (
                             connect_data.protocol_name.value().as_str(),
                             connect_data.protocol_ver.as_u8(),
@@ -410,15 +410,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut guard = mqtt_id_lock.write().await;
                             *guard = client_id.clone();
                         }
-                        trace!(
+                        debug!(
                             "========== register {:?}, {:?}",
-                            client_id.clone(),
+                            mqtt_id,
                             incoming.client_id.clone()
                         );
                         SESSION_MANAGER
-                            .register_mqtt_id(client_id.clone(), incoming.client_id.clone());
-                        SESSION_MANAGER
-                            .set_protocol_version(&client_id.clone(), connack_data.version);
+                            .register_mqtt_id(mqtt_id.clone(), incoming.client_id.clone());
+                        SESSION_MANAGER.set_protocol_version(&mqtt_id, connack_data.version);
+
+                        /* clean session */
+                        if connect_data.connect_flags.clean_start {
+                            SESSION_MANAGER.discard_queue(mqtt_id).unwrap();
+                        } else {
+                            SESSION_MANAGER.flush_queue(&mqtt_id);
+                            let _ = SESSION_MANAGER.initialize_queue(mqtt_id);
+                        }
+
                         let connack_response = ConnackResponse::from(connack_data);
                         trace!("(connect) Connack response");
                         Ok(connack_response)

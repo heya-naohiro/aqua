@@ -832,11 +832,11 @@ impl MqttPacket for Pubrel {
         remaining_length: usize,
         protocol_version: Option<ProtocolVersion>,
     ) -> Result<usize, MqttError> {
-        debug!("decode variable header {:?} / {:?} / {:?}/{:?}", &buf, &start_pos, &remaining_length, &protocol_version);
+        
         let mut next_pos = start_pos;
         (self.packet_id, next_pos) = PacketId::try_from(buf, next_pos)?;
         if remaining_length == 2 {
-            debug!("heare !!! {:?}", &next_pos);
+            
             return Ok(next_pos);
         }
         let (reason_code, mut next_pos) = PubrelReasonCode::try_from(buf, next_pos)?;
@@ -883,7 +883,7 @@ impl MqttPacket for Pubrel {
         _protocol_version: Option<ProtocolVersion>,
     ) -> Result<bytes::BytesMut, MqttError> {
         // no payload
-        debug!("decode payload!!!!!!!!!!!!!!!");
+        
         Ok(buf)
     }
     
@@ -1850,13 +1850,13 @@ impl ProtocolVersion {
 }
 
 #[derive(PartialEq, Debug, Default, Clone, Copy)]
-struct ConnectFlags {
-    user_name_flag: bool,
-    password_flag: bool,
-    will_retain: bool,
-    will_qos: QoS,
-    will_flag: bool,
-    clean_start: bool,
+pub struct ConnectFlags {
+    pub user_name_flag: bool,
+    pub password_flag: bool,
+    pub will_retain: bool,
+    pub will_qos: QoS,
+    pub will_flag: bool,
+    pub clean_start: bool,
 }
 impl ConnectFlags {
     fn try_from(

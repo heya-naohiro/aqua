@@ -20,11 +20,11 @@ impl RetainStore {
     }
 
     pub fn update_retain(&self, topic: String, pkt: Publish) {
-        debug!("update retain {:?}", topic);
+        
         self.kvs.insert(topic.clone(), pkt);
     }
     pub fn remove_retain(&self, topic: &str) {
-        debug!("remove retain {:?}", topic);
+        
         self.kvs.remove(topic);
     }
     pub fn check_retain(&self, topic_filter: String) -> Vec<Publish> {
