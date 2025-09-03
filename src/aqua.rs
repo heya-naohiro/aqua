@@ -4,7 +4,7 @@
 // https://github.com/tokio-rs/axum/blob/main/axum/src/serve/listener.rs#L9
 use mqtt_coder::mqtt::{self, ControlPacket};
 use std::convert::Infallible;
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 use std::future::{poll_fn, IntoFuture};
 use std::io;
 use std::marker::PhantomData;
@@ -49,10 +49,8 @@ where
         + Send
         + 'static,
     for<'a> <M as Service<connection::request::IncomingStream>>::Future: Send,
-    S: Service<
-            connection::request::Request<ControlPacket>,
-            Response = connection::response::Response,
-        > + Unpin
+    S: Service<connection::WriteRequest, Response = connection::response::Response>
+        + Unpin
         + Clone
         + Send
         + 'static,
@@ -63,7 +61,7 @@ where
         + 'static,
     for<'a> <MC as Service<connection::request::IncomingStream>>::Future: Send,
     SC: Service<
-            connection::request::Request<ControlPacket>,
+            connection::WriteRequest,
             Response = connection::connack_response::ConnackResponse,
             Error = connection::connack_response::ConnackError,
         > + Unpin
@@ -115,10 +113,8 @@ where
         + Send
         + 'static,
     for<'a> <M as Service<connection::request::IncomingStream>>::Future: Send,
-    S: Service<
-            connection::request::Request<ControlPacket>,
-            Response = connection::response::Response,
-        > + Unpin
+    S: Service<connection::WriteRequest, Response = connection::response::Response>
+        + Unpin
         + Clone
         + Send
         + 'static,
@@ -129,7 +125,7 @@ where
         + 'static,
     for<'a> <MC as Service<connection::request::IncomingStream>>::Future: Send,
     SC: Service<
-            connection::request::Request<ControlPacket>,
+            connection::WriteRequest,
             Response = connection::connack_response::ConnackResponse,
             Error = connection::connack_response::ConnackError,
         > + Unpin

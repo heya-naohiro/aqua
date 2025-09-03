@@ -1,4 +1,5 @@
-use mqtt_coder::mqtt::{self, ProtocolVersion};
+use mqtt_coder::mqtt::{self, ControlPacket, ProtocolVersion};
+use std::collections::VecDeque;
 use std::convert::From;
 use std::fmt;
 
@@ -7,6 +8,7 @@ pub struct ConnackResponse {
     pub session_present: bool,
     pub version: ProtocolVersion,
     pub connack_properties: Option<mqtt::ConnackProperties>,
+    pub follow_up_packet: VecDeque<ControlPacket>,
 }
 
 impl ConnackResponse {
@@ -26,6 +28,7 @@ impl From<mqtt::Connack> for ConnackResponse {
             version: item.version,
             session_present: item.session_present,
             connack_properties: item.connack_properties.map(|prop| prop.into()),
+            follow_up_packet: VecDeque::new(),
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::aqua::connection::{response::Response, WriteRequest};
 use dashmap::DashMap;
 use futures_util::io::Write;
+use log::error;
 use mqtt_coder::mqtt::{
     self, ClientId, ControlPacket, MqttError, MqttPacket, PacketId, Publish, QoS,
 };
@@ -58,8 +59,10 @@ impl SessionManager {
     }
     pub fn add_to_queue(&self, mqtt_id: String, packet: mqtt::ControlPacket) {
         if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(&mqtt_id) {
+            debug!("exist queue, so pushback {:?}", mqtt_id);
             queue.push_back(packet);
         } else {
+            debug!("new queue {:?}", mqtt_id);
             let mut new_queue = VecDeque::new();
             new_queue.push_back(packet); // ここで追加
             self.queue_by_mqtt_id.insert(mqtt_id, new_queue);
@@ -112,14 +115,8 @@ impl SessionManager {
     }
 
     pub fn flush_queue(&self, mqtt_id: &String) {
-        debug!("flush queue {:?}", &mqtt_id);
-        if let Some(mut queue) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
-            debug!("-- queue exist {:?}", &mqtt_id);
-            while let Some(pkt) = queue.pop_front() {
-                debug!("-- -- sending... {:?} {:?}", &mqtt_id, &pkt);
-                let _ = self.send_by_mqtt_id(mqtt_id, pkt);
-            }
-        }
+        // queueをそのまま返してConnackに引き継ぐ
+        // だめだったら返ってくるはずなので問題ない、たぶん
     }
 
     pub fn send_by_mqtt_id(
@@ -127,16 +124,14 @@ impl SessionManager {
         mqtt_id: &String,
         pkt: ControlPacket,
     ) -> Result<(), TrySendError<ControlPacket>> {
-        trace!("sent_by_mqtt_id {:?}", mqtt_id);
-        trace!("client_id map  {:?}", self.by_client_id);
-        trace!("mqtt_id map  {:?}", self.by_client_mqtt);
+        debug!("sent_by_mqtt_id {:?}", mqtt_id);
         if let Some(value_ref) = self.by_mqtt_id.get(mqtt_id) {
             let client_id = *value_ref;
 
             match self.send_by_client_id(
                 &client_id,
                 WriteRequest {
-                    packet: pkt,
+                    packet: pkt.clone(),
                     mqtt_id: mqtt_id.to_string(),
                 },
             ) {
@@ -144,26 +139,65 @@ impl SessionManager {
                     debug!("send suceed!! {:?}", mqtt_id);
                     Ok(())
                 }
-                Err(_) => {
-                    debug!("send failed!!! {:?}", mqtt_id);
-                    // Closedの場合もここに入る
-                    Ok(())
-                }
+                Err(e) => match e {
+                    TrySendError::Closed(_) => {
+                        let _ = self.by_mqtt_id.remove(mqtt_id);
+                        self.by_client_mqtt.remove(&client_id);
+                        self.unregister_client_id(client_id);
+                        if let Some(mut q) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+                            q.push_front(pkt);
+                        } else {
+                            let mut new_q = VecDeque::new();
+                            new_q.push_back(pkt);
+                            self.queue_by_mqtt_id.insert(mqtt_id.clone(), new_q);
+                        }
+                        return Ok(());
+                    }
+                    TrySendError::Full(_orig) => {
+                        // バッファ満杯ならキューに入れておく（push_back で順序維持）
+                        if let Some(mut q) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+                            q.push_back(pkt);
+                        } else {
+                            let mut new_q = VecDeque::new();
+                            new_q.push_back(pkt);
+                            self.queue_by_mqtt_id.insert(mqtt_id.clone(), new_q);
+                        }
+                        return Ok(());
+                    }
+                },
             }
         } else {
-            trace!("cannot send anything");
+            trace!(
+                "cannot send anything -> queueing packet for mqtt_id {}",
+                mqtt_id
+            );
+            // mqtt_id に登録が無い場合でもキューに保存する
+            if let Some(mut q) = self.queue_by_mqtt_id.get_mut(mqtt_id) {
+                q.push_back(pkt);
+            } else {
+                let mut new_q = VecDeque::new();
+                new_q.push_back(pkt);
+                self.queue_by_mqtt_id.insert(mqtt_id.clone(), new_q);
+            }
             Ok(())
         }
     }
 
     pub fn register_mqtt_id(&self, mqtt_id: String, client_id: Uuid) {
         trace!("register_mqtt_id {:?} {:?}", mqtt_id, client_id);
+        if let Some((_, old_client_id)) = self.by_mqtt_id.remove(&mqtt_id) {
+            debug!("removing old client {:?}", old_client_id);
+            self.by_client_mqtt.remove(&old_client_id);
+            self.unregister_client_id(old_client_id);
+        }
+
         self.by_mqtt_id.insert(mqtt_id.clone(), client_id);
         self.by_client_mqtt.insert(client_id, mqtt_id);
     }
     pub fn unregister_mqtt_id(&self, mqtt_id: String) {
         if let Some((_, client_id)) = self.by_mqtt_id.remove(&mqtt_id) {
             self.by_client_mqtt.remove(&client_id);
+            self.unregister_client_id(client_id);
         }
     }
     pub fn get_mqtt_id(&self, client_id: &Uuid) -> Option<String> {

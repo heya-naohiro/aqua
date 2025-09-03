@@ -12,6 +12,7 @@ use mqtt_coder::mqtt::ControlPacket;
 use mqtt_coder::mqtt::MqttError;
 use pin_project::pin_project;
 use response::Response;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Context;
@@ -68,15 +69,16 @@ enum ConnectionState<F, CF> {
     PreConnection, // index 0
     ProcessingConnect(Pin<Box<CF>>),                    // index 1
     ResponseConnect(connack_response::ConnackResponse), // index 2
-    ReadingPacket,                                      // index 3
-    ProcessingService(Pin<Box<F>>),                     // index 4
-    WritingPacket(Response),                            // index 5
+    SendingFollowUps(VecDeque<ControlPacket>),
+    ReadingPacket,                  // index 3
+    ProcessingService(Pin<Box<F>>), // index 4
+    WritingPacket(Response),        // index 5
 }
 
 #[derive(Clone, Debug)]
-struct WriteRequest {
-    packet: ControlPacket,
-    mqtt_id: String,
+pub struct WriteRequest {
+    pub packet: ControlPacket,
+    pub mqtt_id: String,
 }
 
 impl<S, CS, IO> Connection<S, CS, IO>
@@ -144,6 +146,13 @@ where
                         }
                         Ok(_) => {}
                         Err(e) => {
+                            if write_req.mqtt_id != "" {
+                                debug!(
+                                    "add to queue, {:?} {:?}",
+                                    write_req.mqtt_id, write_req.packet
+                                );
+                            }
+                            SESSION_MANAGER.add_to_queue(write_req.mqtt_id, write_req.packet);
                             error!("Write error: {:?}", e);
                             return;
                         }
@@ -243,6 +252,25 @@ where
                 }
                 new_state = Some(ConnectionState::ReadingPacket);
                 trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+            }
+            ConnectionState::SendingFollowUps(mut packets) => {
+                if let Some(packet) = packets.pop_front() {
+                    let mqtt_id = this.mqtt_id.clone().unwrap();
+                    match this.tx.try_send(WriteRequest { packet, mqtt_id }) {
+                        Ok(()) => trace!("sent follow-up packet"),
+                        Err(e) => {
+                            error!("failed to send follow-up: {:?}", e);
+                            return Poll::Ready(Err("Channel Error".into()));
+                        }
+                    }
+                    if !packets.is_empty() {
+                        new_state = Some(ConnectionState::SendingFollowUps(packets));
+                    } else {
+                        new_state = Some(ConnectionState::ReadingPacket);
+                    }
+                } else {
+                    new_state = Some(ConnectionState::ReadingPacket);
+                }
             }
             // 要求をReadするフェーズ
             ConnectionState::ReadingPacket => {
@@ -344,7 +372,7 @@ where
             Poll::Ready(Ok(0)) => {
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
             }
-            Poll::Ready(Ok(n)) => {}
+            Poll::Ready(Ok(_n)) => {}
             Poll::Ready(Err(e)) => {
                 return Poll::Ready(Err(Box::new(e)));
             }

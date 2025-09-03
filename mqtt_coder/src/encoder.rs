@@ -1,6 +1,7 @@
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
+use tracing::debug;
 
 use crate::mqtt::{ControlPacket, MqttPacket};
 
@@ -31,6 +32,7 @@ impl Encoder {
         if let Some(payload) = packet.encode_payload_chunk()? {
             buffer.extend_from_slice(&payload);
         }
+        debug!("!== encode all {:?}", packet);
         Ok(())
     }
 
@@ -42,6 +44,7 @@ impl Encoder {
     ) -> Poll<Result<Option<()>, Box<dyn std::error::Error>>> {
         match self.state {
             EncodeState::Header => {
+                debug!("!== header {:?}", packet);
                 let fixed_header = packet.encode_header()?;
                 buffer.extend_from_slice(&fixed_header);
                 self.state = EncodeState::Payload;
@@ -57,7 +60,10 @@ impl Encoder {
                     return Poll::Ready(Ok(None));
                 }
             }
-            EncodeState::Done => return Poll::Ready(Ok(None)),
+            EncodeState::Done => {
+                debug!("!== encode done {:?}", packet);
+                return Poll::Ready(Ok(None));
+            }
         }
     }
 }

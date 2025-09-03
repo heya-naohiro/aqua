@@ -1,11 +1,9 @@
-use aqua::session_manager;
 use aqua::ConnackError;
 use aqua::ConnackResponse;
-use aqua::RetainStore;
+use aqua::WriteRequest;
 use aqua::RETAIN_STORE;
 use aqua::SESSION_MANAGER;
 use aqua::{request, response};
-use axum::routing::connect;
 use mqtt_coder::mqtt::Puback;
 use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
@@ -19,6 +17,7 @@ use tokio::net::TcpListener;
 use topic_manager::TopicManager;
 use tower::service_fn;
 use tracing::debug;
+use tracing::error;
 use tracing::trace;
 use tracing_subscriber;
 
@@ -37,13 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mqtt_id_lock = incoming.mqtt_id.clone();
             let peer = incoming.addr;
             async move {
-                Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
-                    trace!("(normal) {:?} {:?}", peer, req.body);
+                Ok::<_, Infallible>(service_fn(move |req: WriteRequest| {
+                    trace!("(normal) {:?} {:?}", peer, req.packet);
                     let mqtt_id_lock = mqtt_id_lock.clone();
                     let topic_mgr = Arc::clone(&topic_mgr);
 
                     Box::pin(async move {
-                        match req.body {
+                        debug!("(service){:?}", req.packet);
+                        match req.packet {
                             ControlPacket::DISCONNECT(_disconnect) => {
                                 trace!("Disconnect");
                                 let mqtt_id_guard = mqtt_id_lock.read().await;
@@ -51,10 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 drop(mqtt_id_guard);
                                 if !mqtt_id.is_empty() {
                                     SESSION_MANAGER.unregister_mqtt_id(mqtt_id.clone());
-                                    trace!(
-                                        "DISCONNECT: MQTT ID '{}' unregistered",
-                                        mqtt_id.clone()
-                                    );
+                                    trace!("DISCONNECT: MQTT ID '{}' unregistered", mqtt_id);
                                 } else {
                                     trace!("DISCONNECT: MQTT ID was empty; nothing to unregister");
                                 }
@@ -68,11 +65,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             ControlPacket::SUBSCRIBE(subpacket) => {
                                 trace!("subscribe");
-                                let mut success_codes = vec![];
+                                let mut success_codes = Vec::new();
                                 let guard = mqtt_id_lock.read().await;
                                 let mqtt_id: String = guard.clone();
 
-                                if mqtt_id != "".to_string() {
+                                if mqtt_id.is_empty() {
                                     for (filter, suboption) in &subpacket.topic_filters {
                                         trace!("Subscribe Done!! ");
                                         topic_mgr.register(
@@ -121,7 +118,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 trace!("publish");
                                 let mqtt_id_guard = mqtt_id_lock.read().await;
                                 let mqtt_id = mqtt_id_guard.clone();
-                                drop(mqtt_id_guard);
                                 let version = SESSION_MANAGER
                                     .get_protocol_version(&mqtt_id)
                                     .unwrap_or(ProtocolVersion::new(0x04));
@@ -227,7 +223,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Ok(()) = result {
                                                 debug!("Delivering to {:?}", sub_id);
                                             } else {
-                                                debug!("Error {:?}", sub_id);
+                                                error!("Failed to send to {:?}. Unregistering mqtt_id.", sub_id);
+                                                let _ = SESSION_MANAGER
+                                                    .unregister_mqtt_id(sub_id.clone());
                                             }
                                         }
                                     });
@@ -259,7 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             ControlPacket::CONNECT(_) => {
-                                trace!(
+                                debug!(
                                     "Protocol error: CONNECT received after session established"
                                 );
                                 return Err(mqtt::MqttError::ProtocolViolation);
@@ -367,7 +365,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             other => {
                                 trace!("other {:?}", other);
                                 return Ok(response::Response::new(ControlPacket::NOOPERATION));
-                                //return Ok(response::Response::default(response::Response::new());
                             }
                         }
                     })
@@ -377,13 +374,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let make_connect_service = service_fn(move |incoming: request::IncomingStream| async move {
         let mqtt_id_lock = incoming.mqtt_id.clone();
-        Ok::<_, Infallible>(service_fn(move |req: request::Request<ControlPacket>| {
+        Ok::<_, Infallible>(service_fn(move |req: WriteRequest| {
             let mqtt_id_lock = mqtt_id_lock.clone();
             Box::pin(async move {
-                println!("(connect) Processing request");
-                match req.body {
+                debug!("(connect) Processing request mqtt_id: {:?}", mqtt_id_lock);
+                match req.packet {
                     ControlPacket::CONNECT(connect_data) => {
+                        debug!("connect process start");
                         let mqtt_id = connect_data.client_id.clone().into_inner();
+                        debug!("connect A");
+
                         match (
                             connect_data.protocol_name.value().as_str(),
                             connect_data.protocol_ver.as_u8(),
@@ -405,6 +405,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             connack_properties: None,
                             version: ProtocolVersion::new(0x04),
                         };
+                        debug!("connect data");
                         let client_id: String = connect_data.client_id.clone().into_inner();
                         {
                             let mut guard = mqtt_id_lock.write().await;
@@ -417,19 +418,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         SESSION_MANAGER
                             .register_mqtt_id(mqtt_id.clone(), incoming.client_id.clone());
-                        SESSION_MANAGER.set_protocol_version(&mqtt_id, connack_data.version);
+                        debug!("connect data A");
 
-                        /* clean session */
+                        SESSION_MANAGER.set_protocol_version(&mqtt_id, connack_data.version);
+                        debug!("connect data B");
+
+                        /* easy implement */
                         if connect_data.connect_flags.clean_start {
+                            debug!("clean start!!!");
                             SESSION_MANAGER.discard_queue(mqtt_id).unwrap();
                         } else {
-                            SESSION_MANAGER.flush_queue(&mqtt_id);
-                            let _ = SESSION_MANAGER.initialize_queue(mqtt_id);
+                            /* ここで実装する！！！！！！！！！！！！ */
                         }
+                        debug!("connect data C");
 
                         let connack_response = ConnackResponse::from(connack_data);
-                        trace!("(connect) Connack response");
-                        Ok(connack_response)
+                        debug!("(connect) Connack response");
+
+                        Ok(connack_response) //-> No operation (先に Connackを返す)
                     }
                     _ => {
                         println!("(connect) Received non-CONNECT packet");
