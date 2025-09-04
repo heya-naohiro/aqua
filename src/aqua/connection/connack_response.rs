@@ -8,7 +8,7 @@ pub struct ConnackResponse {
     pub session_present: bool,
     pub version: ProtocolVersion,
     pub connack_properties: Option<mqtt::ConnackProperties>,
-    pub follow_up_packet: VecDeque<ControlPacket>,
+    pub follow_up_packet_queue: VecDeque<ControlPacket>,
 }
 
 impl ConnackResponse {
@@ -20,6 +20,9 @@ impl ConnackResponse {
             version: self.version,
         }
     }
+    pub fn setting_follow_up_packets(&mut self, q: VecDeque<ControlPacket>) {
+        self.follow_up_packet_queue = q;
+    }
 }
 
 impl From<mqtt::Connack> for ConnackResponse {
@@ -28,7 +31,7 @@ impl From<mqtt::Connack> for ConnackResponse {
             version: item.version,
             session_present: item.session_present,
             connack_properties: item.connack_properties.map(|prop| prop.into()),
-            follow_up_packet: VecDeque::new(),
+            follow_up_packet_queue: VecDeque::new(),
         }
     }
 }

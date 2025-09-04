@@ -114,9 +114,12 @@ impl SessionManager {
         }
     }
 
-    pub fn flush_queue(&self, mqtt_id: &String) {
-        // queueをそのまま返してConnackに引き継ぐ
-        // だめだったら返ってくるはずなので問題ない、たぶん
+    pub fn flush_queue(&self, mqtt_id: &String) -> VecDeque<mqtt::ControlPacket> {
+        debug!("flush_queue {:?}", mqtt_id);
+        self.queue_by_mqtt_id
+            .remove(mqtt_id)
+            .map(|(_, queue)| queue)
+            .unwrap_or_else(VecDeque::new)
     }
 
     pub fn send_by_mqtt_id(

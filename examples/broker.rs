@@ -422,17 +422,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         SESSION_MANAGER.set_protocol_version(&mqtt_id, connack_data.version);
                         debug!("connect data B");
+                        let mut connack_response = ConnackResponse::from(connack_data);
 
                         /* easy implement */
                         if connect_data.connect_flags.clean_start {
                             debug!("clean start!!!");
                             SESSION_MANAGER.discard_queue(mqtt_id).unwrap();
                         } else {
-                            /* ここで実装する！！！！！！！！！！！！ */
+                            let q = SESSION_MANAGER.flush_queue(&mqtt_id);
+                            connack_response.setting_follow_up_packets(q);
                         }
                         debug!("connect data C");
 
-                        let connack_response = ConnackResponse::from(connack_data);
                         debug!("(connect) Connack response");
 
                         Ok(connack_response) //-> No operation (先に Connackを返す)
