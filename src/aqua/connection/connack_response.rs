@@ -20,6 +20,16 @@ impl ConnackResponse {
             version: self.version,
         }
     }
+    pub fn into_connack_and_queue(self) -> (mqtt::Connack, VecDeque<ControlPacket>) {
+        let follow_up_packet_queue = self.follow_up_packet_queue;
+        let connack = mqtt::Connack {
+            session_present: self.session_present,
+            connect_reason: mqtt::ConnackReason::Success,
+            connack_properties: self.connack_properties.map(|prop| prop.into()),
+            version: self.version,
+        };
+        (connack, follow_up_packet_queue)
+    }
     pub fn setting_follow_up_packets(&mut self, q: VecDeque<ControlPacket>) {
         self.follow_up_packet_queue = q;
     }

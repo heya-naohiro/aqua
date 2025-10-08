@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower::service_fn;
+use tracing::info;
 mod aqua;
 use aqua::connection::connack_response::ConnackResponse;
 use aqua::connection::request::Request;
@@ -106,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         // PUBRELに対する応答（QoS2の第2段階）
                         ControlPacket::PUBREL(pubrel) => {
-                            println!("Received PUBREL, responding with PUBCOMP");
+                            info!("Received PUBREL, responding with PUBCOMP");
                             let pubcomp = mqtt::Pubcomp {
                                 packet_id: pubrel.packet_id,
                                 pubcomp_reason: None,

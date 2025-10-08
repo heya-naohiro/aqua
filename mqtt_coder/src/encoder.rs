@@ -32,7 +32,6 @@ impl Encoder {
         if let Some(payload) = packet.encode_payload_chunk()? {
             buffer.extend_from_slice(&payload);
         }
-        debug!("!== encode all {:?}", packet);
         Ok(())
     }
 
@@ -63,7 +62,7 @@ impl Encoder {
             EncodeState::Done => {
                 debug!("!== encode done {:?}", packet);
                 return Poll::Ready(Ok(None));
-            }
+            } /* [TODO] follow up */
         }
     }
 }

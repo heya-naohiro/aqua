@@ -1,7 +1,7 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use thiserror::Error;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use num_enum::TryFromPrimitive;
 
 use crate::mqtt;
@@ -423,6 +423,7 @@ impl Connack {
         /* 2byte */
         // Connect Reason Code
         buf.put_u8(self.connect_reason as u8);
+        info!("Connect Reason: {:?}", self.connect_reason as u8);
 
         if self.version == ProtocolVersion(0x05) {
             /* Properties length */
@@ -1266,6 +1267,15 @@ impl Retain {
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct Dup(bool); // fixed header
 
+impl Dup {
+    pub fn new(v: bool) -> Self {
+        Dup(v)
+    }
+
+    pub fn get(&self) -> bool {
+        self.0
+    }
+}
 #[derive(PartialEq, Debug, Default, Clone)]
 pub struct Suback {
     pub packet_id: PacketId,

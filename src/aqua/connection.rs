@@ -26,6 +26,7 @@ use tokio_util::io::poll_read_buf;
 use tower::Service;
 use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::trace;
 use uuid::Uuid;
 //const BUFFER_CAPACITY: usize = 4096;
@@ -130,6 +131,8 @@ where
             let mut encoder = encoder::Encoder::new();
             let mut write_buffer = BytesMut::new();
             while let Some(write_req) = rx.recv().await {
+                info!("write_req {:?}", write_req);
+
                 match encoder.encode_all(&write_req.packet, &mut write_buffer) {
                     Ok(()) => {}
                     Err(e) => {
@@ -146,13 +149,13 @@ where
                         }
                         Ok(_) => {}
                         Err(e) => {
+                            error!("write_error");
                             if write_req.mqtt_id != "" {
-                                debug!(
+                                info!(
                                     "add to queue, {:?} {:?}",
                                     write_req.mqtt_id, write_req.packet
                                 );
                             }
-                            SESSION_MANAGER.add_to_queue(write_req.mqtt_id, write_req.packet);
                             error!("Write error: {:?}", e);
                             return;
                         }
@@ -233,7 +236,7 @@ where
             }
             ConnectionState::ResponseConnect(res) => {
                 trace!("state: ConnectionState::ResponseConnect(res)");
-                let connack = res.to_connack();
+                let (connack, followup_queue) = res.into_connack_and_queue();
                 let respkt = mqtt::ControlPacket::CONNACK(connack);
 
                 // Self
@@ -250,14 +253,19 @@ where
                         return Poll::Ready(Err("Channel closed".into()));
                     }
                 }
-                new_state = Some(ConnectionState::ReadingPacket);
-                trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+                if followup_queue.len() > 0 {
+                    new_state = Some(ConnectionState::SendingFollowUps(followup_queue));
+                    trace!("state: new_state = Some(ConnectionState::SendingFollowUps(followup_queue));");
+                } else {
+                    new_state = Some(ConnectionState::ReadingPacket);
+                    trace!("state: new_state = Some(ConnectionState::ReadingPacket);");
+                }
             }
             ConnectionState::SendingFollowUps(mut packets) => {
                 if let Some(packet) = packets.pop_front() {
                     let mqtt_id = this.mqtt_id.clone().unwrap();
                     match this.tx.try_send(WriteRequest { packet, mqtt_id }) {
-                        Ok(()) => trace!("sent follow-up packet"),
+                        Ok(()) => info!("sent follow-up packet"),
                         Err(e) => {
                             error!("failed to send follow-up: {:?}", e);
                             return Poll::Ready(Err("Channel Error".into()));
@@ -278,7 +286,7 @@ where
                 let req = match this.as_mut().read_packet(cx) {
                     Poll::Ready(Ok(req)) => req,
                     Poll::Ready(Err(e)) => {
-                        trace!("Error");
+                        error!("Error {:?}", e);
                         return Poll::Ready(Err(e));
                     }
                     Poll::Pending => {
@@ -370,6 +378,8 @@ where
 
         match poll_read_buf(this.reader, cx, &mut this.decoder.buf) {
             Poll::Ready(Ok(0)) => {
+                info!("Close Channel...");
+                drop(this.tx.clone()); // close channel because this cannot be sent.
                 return Poll::Ready(Err("Connection closed because poll_Read_buf is zero".into()));
             }
             Poll::Ready(Ok(_n)) => {}
@@ -382,8 +392,7 @@ where
         }
         match this.decoder.poll_decode(cx) {
             Poll::Ready(Ok(p)) => {
-                trace!("decode packet {:?}", p);
-                trace!("rest {:?}", &this.decoder.buf);
+                info!("decode success {:?}", p);
                 Poll::Ready(Ok(WriteRequest {
                     packet: p,
                     mqtt_id: "".to_string(),

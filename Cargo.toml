@@ -12,7 +12,7 @@ anyhow = { version = "1.0.89", features = ["backtrace", "std"] }
 axum = "0.8.4"
 futures-util = "0.3.30"
 pin-project = "1.1.5"
-tokio = { version = "1.38.1", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5.1", features = ["full"] }
 tower-service = "0.3.2"
 axum-core = "0.5.2"

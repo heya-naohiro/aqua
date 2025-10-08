@@ -9,6 +9,7 @@ use mqtt_coder::mqtt::{
     self, Connack, ControlPacket, MqttError, Pingresp, ProtocolVersion, Suback, SubackReasonCode,
 };
 use random_number::random;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use topic_manager::TopicManager;
 use tower::service_fn;
 use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::trace;
 use tracing_subscriber;
 
@@ -44,8 +46,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Box::pin(async move {
                         debug!("(service){:?}", req.packet);
                         match req.packet {
+                            // QoS1, 送信用、一時置き場から削除する
+                            ControlPacket::PUBACK(puback) => {
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
+                                let _ = SESSION_MANAGER.commit_packet(&mqtt_id, puback.packet_id);
+                                Ok(response::Response::new(ControlPacket::NOOPERATION))
+                            }
+                            // QoS2, 送信用、一時置き場から削除する
+                            ControlPacket::PUBCOMP(pubcomp) => {
+                                let mqtt_id_guard = mqtt_id_lock.read().await;
+                                let mqtt_id = mqtt_id_guard.clone();
+                                let _ = SESSION_MANAGER.commit_packet(&mqtt_id, pubcomp.packet_id);
+                                Ok(response::Response::new(ControlPacket::NOOPERATION))
+                            }
                             ControlPacket::DISCONNECT(_disconnect) => {
-                                trace!("Disconnect");
+                                info!("==Disconnect");
                                 let mqtt_id_guard = mqtt_id_lock.read().await;
                                 let mqtt_id = mqtt_id_guard.clone();
                                 drop(mqtt_id_guard);
@@ -69,9 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let guard = mqtt_id_lock.read().await;
                                 let mqtt_id: String = guard.clone();
 
-                                if mqtt_id.is_empty() {
+                                if !mqtt_id.is_empty() {
                                     for (filter, suboption) in &subpacket.topic_filters {
-                                        trace!("Subscribe Done!! ");
+                                        info!("Subscribe Done!! {:?}", filter);
                                         topic_mgr.register(
                                             filter.value().to_string(),
                                             &mqtt_id,
@@ -79,6 +95,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         );
                                         success_codes.push(SubackReasonCode::from(suboption.qos));
                                     }
+                                } else {
+                                    error!("mqtt id is empty, sub");
                                 }
                                 let protocol_version =
                                     SESSION_MANAGER.get_protocol_version(&mqtt_id);
@@ -97,8 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         for_dedup_topic.push(p.topic_name.clone());
                                         if p.qos == mqtt::QoS::QoS2 {
-                                            SESSION_MANAGER
-                                                .add_staging_packet(p.clone(), mqtt::QoS::QoS2);
+                                            SESSION_MANAGER.add_staging_packet(
+                                                &mqtt_id,
+                                                p.clone(),
+                                                mqtt::QoS::QoS2,
+                                            );
                                         }
                                         retain_pubpackets.push(ControlPacket::PUBLISH(p));
                                     }
@@ -115,7 +136,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 return Ok(response::Response::new_packets(respackets));
                             }
                             ControlPacket::PUBLISH(mut pubpacket) => {
-                                trace!("publish");
                                 let mqtt_id_guard = mqtt_id_lock.read().await;
                                 let mqtt_id = mqtt_id_guard.clone();
                                 let version = SESSION_MANAGER
@@ -140,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 };
                                 if qos == mqtt::QoS::QoS2 {
+                                    debug!("QoS2!!!!!!!!!!!");
                                     if pubpacket.payload_length == 0 {
                                         if pubpacket.retain.value() {
                                             RETAIN_STORE.remove_retain(
@@ -147,8 +168,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             );
                                         }
                                     } else {
-                                        SESSION_MANAGER
-                                            .add_staging_packet(pubpacket.clone(), mqtt::QoS::QoS2);
+                                        SESSION_MANAGER.add_staging_packet(
+                                            &mqtt_id,
+                                            pubpacket.clone(),
+                                            mqtt::QoS::QoS2,
+                                        );
                                     }
 
                                     let mqtt_id_guard = mqtt_id_lock.read().await;
@@ -157,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let version = SESSION_MANAGER
                                         .get_protocol_version(&mqtt_id)
                                         .unwrap_or(ProtocolVersion::new(0x04));
+                                    debug!("pub rec!!!!!!!!!!");
                                     return Ok(response::Response::new(ControlPacket::PUBREC(
                                         mqtt::Pubrec {
                                             packet_id: pubpacket.packet_id.clone().unwrap(), // 必ず入っている
@@ -198,6 +223,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 .to_string(),
                                         );
                                         // ここでPublishのIdを引き継ぐ必要はない
+                                        info!("subed_clients:{:?}", subed_clients);
+
                                         for (sub_id, option) in subed_clients {
                                             let mut delivery_msg =
                                                 pubpacket_clone_for_spawn.clone();
@@ -216,12 +243,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 delivery_msg.packet_id =
                                                     Some(mqtt::PacketId::new(n));
                                             }
+
                                             let result = SESSION_MANAGER.send_by_mqtt_id(
                                                 &sub_id,
                                                 ControlPacket::PUBLISH(delivery_msg),
                                             );
                                             if let Ok(()) = result {
-                                                debug!("Delivering to {:?}", sub_id);
+                                                info!("Delivering to {:?}", sub_id);
                                             } else {
                                                 error!("Failed to send to {:?}. Unregistering mqtt_id.", sub_id);
                                                 let _ = SESSION_MANAGER
@@ -273,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .unwrap_or(ProtocolVersion::new(0x04));
                                 // QoS2ステージングメッセージから該当メッセージを取り出して配信
                                 if let Ok(staged_publish) =
-                                    SESSION_MANAGER.fetch_packet(packet_id_outer.clone())
+                                    SESSION_MANAGER.fetch_packet(&mqtt_id, packet_id_outer.clone())
                                 {
                                     let topic_mgr = Arc::clone(&topic_mgr);
                                     let delivery_publish = staged_publish.clone();
@@ -325,7 +353,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         // パケットをコミット（削除）
                                     }
 
-                                    let _ = SESSION_MANAGER.commit_packet(packet_id_outer.clone());
+                                    let _ = SESSION_MANAGER
+                                        .commit_packet(&mqtt_id, packet_id_outer.clone());
                                 }
 
                                 return Ok(response::Response::new(ControlPacket::PUBCOMP(
@@ -352,15 +381,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .unwrap_or(ProtocolVersion::new(0x04)),
                                     },
                                 )));
-                            }
-                            ControlPacket::PUBCOMP(pubcomp_packet) => {
-                                trace!(
-                                    "Received PUBCOMP from subscriber - QoS2 handshake complete"
-                                );
-                                let packet_id = pubcomp_packet.packet_id.clone();
-                                let _ = SESSION_MANAGER.commit_packet(packet_id);
-
-                                return Ok(response::Response::new(ControlPacket::NOOPERATION));
                             }
                             other => {
                                 trace!("other {:?}", other);
@@ -400,12 +420,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         };
                         let connack_data = Connack {
-                            session_present: false,
+                            session_present: !connect_data.connect_flags.clean_start,
                             connect_reason: mqtt::ConnackReason::Success,
                             connack_properties: None,
                             version: ProtocolVersion::new(0x04),
                         };
-                        debug!("connect data");
+
+                        info!("connect ack data {:?}", connack_data);
                         let client_id: String = connect_data.client_id.clone().into_inner();
                         {
                             let mut guard = mqtt_id_lock.write().await;
@@ -418,19 +439,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         SESSION_MANAGER
                             .register_mqtt_id(mqtt_id.clone(), incoming.client_id.clone());
-                        debug!("connect data A");
 
                         SESSION_MANAGER.set_protocol_version(&mqtt_id, connack_data.version);
-                        debug!("connect data B");
                         let mut connack_response = ConnackResponse::from(connack_data);
 
                         /* easy implement */
                         if connect_data.connect_flags.clean_start {
                             debug!("clean start!!!");
-                            SESSION_MANAGER.discard_queue(mqtt_id).unwrap();
+                            SESSION_MANAGER.remove_all_for_mqtt_id(&mqtt_id);
                         } else {
-                            let q = SESSION_MANAGER.flush_queue(&mqtt_id);
-                            connack_response.setting_follow_up_packets(q);
+                            let q = SESSION_MANAGER.replay_inflight(&mqtt_id);
+                            info!("flush queue {} {:?}", mqtt_id, &q);
+
+                            connack_response.setting_follow_up_packets(VecDeque::from(q));
                         }
                         debug!("connect data C");
 
